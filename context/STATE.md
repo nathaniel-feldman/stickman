@@ -4,8 +4,9 @@ _Last updated: 2026-07-05_
 
 ## Status
 
-v1 built, tested headlessly, committed, and pushed. `python stickman.py` runs the
-full toy per DESIGN.md.
+v1 complete. v2 (internal state & world interaction, DESIGN.md phases A–F) in
+progress: **Phase A (debug bars) done**, awaiting playtest confirmation before
+Phase B. `python stickman.py` runs the full toy per DESIGN.md.
 
 ## What works
 
@@ -32,6 +33,12 @@ full toy per DESIGN.md.
 - ALERT state: on first noticing the cursor he recoils a half-step, freezes
   0.5–1.1s facing it, then starts the cautious approach. High fear blocks
   re-approaching from watch until it decays.
+- Phase A debug overlay: D toggles it (default ON); top-left shows the behavior
+  state as text plus live bars (white 1px outline, proportional fill) for
+  speed (normalized to FLEE_SPEED), fear, curiosity, and trust (constant 0.2
+  placeholder until Phase F). Adding a bar = one (label, getter) line in
+  `DebugOverlay.bars`. Verified headlessly (draws every frame across wander/
+  watch/flee scenarios; screenshot reads correctly).
 
 Verified with a headless harness (state transitions incl. alert, curiosity/
 fear arcs, reach, bored walk-off, wander reversal rate, bounds, NaN checks)
@@ -54,6 +61,9 @@ and zoomed pose contact sheets; all pass/read correctly.
 
 ## What's next
 
+- Playtest Phase A (overlay readability, D toggle, bars moving live), then
+  Phase B: head tracking (±60° clamped cursor gaze, body turn after 1s,
+  wander glances).
 - Watch the emotion arc live (notice → alert → creep up → peer/reach → stroll
   off; jerk → panic flee) and feel-tune the emotion constants.
 - Possible polish (would need a DECISIONS entry first): shadow dot under feet,

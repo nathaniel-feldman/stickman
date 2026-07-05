@@ -33,3 +33,13 @@ Running log of design/technical decisions. Newest at the bottom. Format:
   human meeting an unknown object. DESIGN.md updated with the spec.
 - 2026-07-05 — LOSE_INTEREST_S raised 5s → 9s — the curiosity arc (alert →
   approach → watch → lean in → reach) needs the time to play out before boredom.
+- 2026-07-05 — v2 arc (phases A–F: debug bars, head tracking, drives, drawing/
+  novelty, erasure, trust/personality) added to DESIGN.md — user spec; built one
+  phase at a time with a playtest checkpoint between phases.
+- 2026-07-05 — Debug overlay exempt from the "no UI, no text" rule while
+  toggled on (D key, default ON during development) — it's the tuning
+  instrument for every later phase; with it off the screen stays pure creature.
+- 2026-07-05 — Overlay bars defined as a list of (label, getter) pairs on
+  `DebugOverlay` — each later phase adds its meter as one line.
+- 2026-07-05 — `Man.trust` added now as a constant 0.2 placeholder — Phase A
+  spec wants trust in the code structure/overlay before Phase F drives it.

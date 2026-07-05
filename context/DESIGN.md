@@ -70,8 +70,94 @@ smoothly blended (~0.25s), never snapped.
 - Tunable constants grouped at top. ~300–400 lines, commented where animation math
   is non-obvious.
 
-## Definition of done
+## Definition of done (v1)
 
 `python stickman.py` runs. He wanders naturally; slow nearby cursor → cautious
 approach and watching; jerked cursor → stumble and flee. Never leaves the window,
 never jitters, walk visibly matches speed.
+
+---
+
+# v2 — internal state & world interaction
+
+Built in phases, one at a time; each phase ends with a playtest checkpoint before
+the next begins. New tunable constants stay grouped at the top of `stickman.py`.
+The existing wander/flee/approach behaviors must never break; any intentional
+change to their feel gets a DECISIONS entry.
+
+## Phase A: Debug bars
+
+A debug overlay at the top-left, toggled with the D key (default ON during
+development; the "no UI, no text" rule applies only when the overlay is off).
+
+- One horizontal bar per internal property, stacked top-left. Each bar: a white
+  1px rectangle outline (~120px wide, 10px tall) with a white fill proportional
+  to the value (0–1), property name in small white text to its left. White on
+  black only — no color, no styling.
+- Bars update live every frame.
+- Initial rows: current behavior state (as text, not a bar), speed (normalized
+  to max speed), fear, curiosity, and trust (a constant placeholder until
+  Phase F wires it up).
+- Architecture: a list of (label, getter) pairs — adding a bar is one line.
+
+## Phase B: Head tracking
+
+- While standing/watching: head orients toward the cursor, clamped to ±60° from
+  body facing (never owl-neck), rotation smoothed by lerp, never snapped.
+- If the cursor stays outside the clamp range for >1s, he turns his body to
+  face it instead.
+- While wandering: occasional brief glances (1–2s) at a cursor within ~350px,
+  then gaze returns to his heading.
+
+## Phase C: Drives — energy and curiosity
+
+Two internal meters, 0–1, shown in the debug bars.
+
+- ENERGY: decays slowly while moving (faster when fleeing), recovers while
+  idle. Low energy → slower max speed, shorter approach bursts, longer idle
+  pauses. Below ~0.15 → he sits down (legs folded) and rests until energy
+  passes ~0.5. Fleeing overrides sitting (fear beats fatigue) but costs extra.
+- CURIOSITY: rises slowly over time and on novel events; satisfied by
+  approaching/watching the cursor. High → longer watches, closer stops;
+  low → he ignores a slow cursor entirely and keeps wandering.
+- Rates tuned so state changes are observable within 1–3 minutes of play.
+- Behavior selection becomes utility-based: each behavior (wander, approach,
+  watch, rest, flee) scores from drives + stimuli; highest wins; flee always
+  wins when triggered. Transitions blend over ~0.5s as before.
+
+## Phase D: Drawing + novelty response
+
+- Left-click-drag paints white pixels onto a persistent world canvas (brush
+  ~4px). White pixels are solid: steering avoids walking through them
+  (obstacle-avoidance force).
+- Coarse memory grid (~30x20 cells) of what he has SEEN per cell; only cells
+  within ~250px line-of-sight update.
+- Novelty: a seen cell differing from memory spikes novelty → curiosity jumps →
+  INSPECT behavior: approach the novel region, walk along/around the shape,
+  head tracking it, duration scaled by curiosity. Then habituation: novelty
+  decays, he wanders off and ignores it.
+- NOVELTY bar added to the debug overlay.
+
+## Phase E: Erasure reaction
+
+- Right-click-drag erases pixels.
+- If a habituated region (remembered as occupied) is empty when he sees it:
+  SEARCH — go to where the shape was, short back-and-forth walks with head
+  scanning for 5–10s, then give up, update memory, resume wandering.
+
+## Phase F: Trust and personality
+
+- TRUST: 0–1, starts ~0.2, in the debug bars. Rises slowly during calm
+  proximity; drops sharply on each startle. Stopping distance shrinks ~50px
+  (low) → ~15px (high); approach hesitation shortens; above ~0.8 he FOLLOWS a
+  slowly moving cursor, trailing at a distance.
+- PERSONALITY: at spawn, randomize ±30% around defaults — boldness (flee
+  threshold, stopping distance), curiosity gain rate, energy decay rate, base
+  speed. Rolled values printed to console on start.
+
+## Definition of done (v2)
+
+With debug bars on, internal state visibly drives behavior: he rests when
+tired, ignores the cursor when incurious, inspects what the user draws,
+searches for what they erase, and warms up to a gentle cursor over minutes.
+With bars off (D), the screen is pure creature — black, white, alive.

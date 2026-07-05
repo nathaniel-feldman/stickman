@@ -98,6 +98,14 @@ TILT_FREQ = 0.22        # head cocks side to side this often (Hz)
 REACH_DIST = 110.0      # the hand only reaches out within this range
 GUARD_RAISE = 0.8       # how high the hands come up in a flee (fraction of arm)
 
+# ----------------------------------------------------------- debug overlay --
+DEBUG_START_ON = True   # overlay visible at launch (D toggles it)
+BAR_W, BAR_H = 120, 10  # bar outline size (px)
+BAR_GAP = 4             # vertical gap between rows (px)
+BAR_MARGIN = 8          # overlay offset from the top-left corner (px)
+BAR_LABEL_W = 60        # label column width left of the bars (px)
+DEBUG_FONT_PT = 14      # small white text
+
 WANDER, ALERT, APPROACH, WATCH, FLEE = (
     "wander", "alert", "approach", "watch", "flee")
 
@@ -137,6 +145,7 @@ class Man:
         # emotion state (drives posture; read by Skeleton)
         self.fear = 0.0              # 0..1: spikes on startle, decays with calm
         self.curious = 0.0           # 0..1: builds while watching a calm cursor
+        self.trust = 0.2             # 0..1: placeholder until Phase F drives it
         self.alert_span = 0.0        # how long this alert freeze lasts
         self.crouch = 0.0            # smoothed pose params
         self.lean_emo = 0.0
@@ -467,6 +476,41 @@ class Skeleton:
             pygame.draw.line(surf, WHITE, elbow, hand, LINE_W)
 
 
+class DebugOverlay:
+    """Live bars for the man's internal state, top-left. D toggles it.
+
+    Adding a bar is one line in self.bars: a (label, getter) pair where the
+    getter returns a 0..1 value.
+    """
+
+    def __init__(self, man):
+        self.font = pygame.font.Font(None, DEBUG_FONT_PT)
+        self.man = man
+        self.bars = [
+            ("speed", lambda: man.vel.length() / FLEE_SPEED),
+            ("fear", lambda: man.fear),
+            ("curious", lambda: man.curious),
+            ("trust", lambda: man.trust),
+        ]
+
+    def draw(self, surf):
+        y = BAR_MARGIN
+        state = self.font.render("state: " + self.man.state, True, WHITE)
+        surf.blit(state, (BAR_MARGIN, y))
+        y += state.get_height() + BAR_GAP
+
+        x = BAR_MARGIN + BAR_LABEL_W
+        for label, get in self.bars:
+            v = max(0.0, min(1.0, get()))
+            text = self.font.render(label, True, WHITE)
+            surf.blit(text, (BAR_MARGIN, y + (BAR_H - text.get_height()) // 2))
+            pygame.draw.rect(surf, WHITE, (x, y, BAR_W, BAR_H), 1)
+            fill = round((BAR_W - 4) * v)
+            if fill > 0:
+                pygame.draw.rect(surf, WHITE, (x + 2, y + 2, fill, BAR_H - 4))
+            y += BAR_H + BAR_GAP
+
+
 def main():
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -475,6 +519,8 @@ def main():
 
     man = Man((WIDTH / 2, HEIGHT / 2))
     skeleton = Skeleton()
+    overlay = DebugOverlay(man)
+    debug_on = DEBUG_START_ON
 
     running = True
     while running:
@@ -484,6 +530,8 @@ def main():
                     event.type == pygame.KEYDOWN
                     and event.key == pygame.K_ESCAPE):
                 running = False
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_d:
+                debug_on = not debug_on
 
         cursor = Vector2(pygame.mouse.get_pos())
         if dt > 0:
@@ -491,6 +539,8 @@ def main():
 
         screen.fill(BLACK)
         skeleton.draw(screen, man)
+        if debug_on:
+            overlay.draw(screen)
         pygame.display.flip()
 
     pygame.quit()
