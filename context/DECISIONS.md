@@ -43,3 +43,27 @@ Running log of design/technical decisions. Newest at the bottom. Format:
   `DebugOverlay` — each later phase adds its meter as one line.
 - 2026-07-05 — `Man.trust` added now as a constant 0.2 placeholder — Phase A
   spec wants trust in the code structure/overlay before Phase F drives it.
+- 2026-07-05 — EMOTION PROTOCOL added to DESIGN.md and implemented: emotion is
+  a continuous valence-arousal point, not a state machine — user spec; the
+  discrete fear scalar "made no sense" and is replaced by the low-valence/
+  high-arousal corner weight.
+- 2026-07-05 — Emotion modulates via four smooth corner-weight products
+  (afraid/excited/content/dejected = max(0,±v)·a or ·(1-a)) — spec forbids
+  hard-edged if/else regions; products give continuous blending for free.
+- 2026-07-05 — Spec impulses mapped to today's only stimulus, the cursor:
+  entering ALERT = "novelty detected"; walking off bored after curiosity
+  peaked (>0.6) = "completed an inspection" — Phase D will remap these to
+  drawn shapes without changing the emotion code.
+- 2026-07-05 — Old FEAR_CREEP replaced by a P_PROWL pressure (fast cursor
+  nearby drifts valence down, arousal up) — preserves the v1 "prowling cursor
+  unnerves him" behavior inside the new model.
+- 2026-07-05 — Calm-company trust gate implemented as a smooth ramp
+  (trust 0.4→0.7) instead of a hard >0.5 test — keeps inputs as edge-free as
+  outputs; inert until Phase F since trust is still the 0.2 placeholder.
+- 2026-07-05 — Emotion constants for not-yet-built systems (energy, resting,
+  erasure, trust milestone, enclosure) declared now, wired in phases C–F —
+  keeps the whole protocol's tuning surface in one block at the top.
+- 2026-07-05 — Overlay: behavior-state text row removed and bar fills drawn
+  flush against their 1px outlines — user request; valence gets a centered
+  bar with a zero tick, and a debug-only "mood:" region label sits below the
+  bars (the creature's code never reads it).

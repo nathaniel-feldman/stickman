@@ -161,3 +161,100 @@ With debug bars on, internal state visibly drives behavior: he rests when
 tired, ignores the cursor when incurious, inspects what the user draws,
 searches for what they erase, and warms up to a gentle cursor over minutes.
 With bars off (D), the screen is pure creature — black, white, alive.
+
+---
+
+# EMOTION PROTOCOL — continuous valence-arousal
+
+Supersedes the v1 "Emotional expression" fear scalar: fear is no longer a
+stored variable but the low-valence/high-arousal region of a continuous 2D
+emotional state. Curiosity remains a separate drive (Phase C); its gain rate
+now couples to valence (below).
+
+## Core model: valence-arousal (no emotion state machine)
+
+Emotion is NOT a discrete state. A continuous 2D emotional state:
+
+- valence: -1 (distressed) to +1 (content), baseline 0
+- arousal: 0 (calm) to 1 (activated), baseline ~0.2
+
+Both are float fields on Man, updated every frame, moving toward baseline
+with slow decay (half-life ~20–40s for valence, ~5–10s for arousal — arousal
+is fast weather, valence is slow mood).
+
+## Inputs (event-driven impulses + continuous pressures)
+
+Impulses (instant bumps when events occur):
+
+- Startle/flee trigger: arousal +0.6, valence -0.4
+- Novelty detected: arousal +0.3, valence +0.1
+- Completed an inspection (habituated successfully): valence +0.15
+- Erasure discovered (searched, found nothing): valence -0.2, arousal +0.2
+- Trust milestone crossed upward: valence +0.2
+
+Continuous pressures (per-second drift while condition holds):
+
+- Energy < 0.25: valence drifts down
+- Resting successfully: valence drifts up, arousal drifts down
+- Calm cursor nearby with trust > 0.5: valence drifts up slightly
+- Enclosed/trapped (when Phase D obstacle data allows detection): arousal
+  drifts up, valence drifts down
+
+All impulse magnitudes and drift rates are named constants at the top of the
+file. Inputs whose systems don't exist yet (energy, resting, erasure, trust
+milestones, enclosure) get their constants now and are wired when their
+phase (C/D/E/F) lands.
+
+## Outputs: emotion modulates, never selects
+
+Emotion must NOT directly choose behaviors (drives + stimuli still do that,
+flee still always wins). Instead it modulates parameters continuously:
+
+- Arousal → movement gain: max speed and max force scale up with arousal
+  (calm = languid, activated = twitchy). Walk stride frequency and
+  head-glance frequency scale with arousal.
+- Valence → posture: torso lean/slump. Positive = upright, slight bounce in
+  the walk (amplitude of the walk bob). Negative = slumped shoulders,
+  lowered head default angle, shorter stride.
+- Low valence + high arousal (fear region): stronger flee distances, larger
+  startle threshold sensitivity (easier to spook), hesitation pauses
+  lengthen.
+- High valence + high arousal (excitement region): approach bursts get
+  longer and bouncier, stopping distance shrinks slightly.
+- High valence + low arousal (content region): slow wandering with longer
+  idle pauses, occasional small idle animations (weight shift).
+- Low valence + low arousal (dejected region): slowest movement, ignores
+  mild novelty (novelty threshold rises), sits more readily (once Phase C
+  adds sitting).
+
+Implement these as smooth functions of (valence, arousal) — no if/else
+regions with hard edges. The named regions above are tuning guidance, not
+code branches.
+
+## Emotion labeling (debug only)
+
+- VALENCE and AROUSAL bars in the debug overlay (valence bar centered: fill
+  extends right of center for positive, left of center for negative).
+- A text label in the overlay naming the nearest emotion region: afraid,
+  excited, content, dejected, neutral — computed from which
+  quadrant/magnitude the (valence, arousal) point falls in. Tuning aid only:
+  the creature's code must never read it.
+
+## Interaction with existing systems
+
+- Trust changes feed valence (impulses above); valence must NOT feed trust
+  (trust is earned by events only).
+- Curiosity gain rate scales mildly with valence (a distressed creature
+  explores less).
+- Personality (Phase F) additionally randomizes: baseline valence, arousal
+  decay rate, and impulse sensitivity ±30%.
+
+## Definition of done
+
+With debug bars on: startle him twice and watch arousal spike then decay
+over ~10s while valence recovers over ~30s+ — and SEE the difference in his
+movement during that window (twitchy, easily spooked, slumped) versus 2
+minutes later (recovered). Leave him alone with a gentle cursor for 3
+minutes and watch him visibly settle into content: slower, upright,
+unbothered. The emotional state must be readable from movement alone with
+the overlay OFF.

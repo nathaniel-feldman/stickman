@@ -83,10 +83,53 @@ BURST_SPAN = (0.35, 0.8)         # approach: seconds of moving per burst
 BURST_REST = (0.3, 0.7)          # approach: seconds of pausing per burst
 ALERT_SPAN = (0.5, 1.1)          # seconds frozen sizing up a new cursor
 
+# ------------------------------------------------ emotion: valence-arousal --
+# Continuous 2D emotional state (no discrete emotion states). Valence is the
+# slow mood (-1 distressed .. +1 content), arousal the fast weather (0 calm ..
+# 1 activated). Events bump them (impulses), held conditions drift them
+# (pressures), and both decay toward baseline. Emotion never picks behaviors —
+# it only modulates their parameters, smoothly, via four corner weights:
+#   afraid   = max(0,-v)*a        excited = max(0,v)*a
+#   dejected = max(0,-v)*(1-a)    content = max(0,v)*(1-a)
+VAL_BASE = 0.0
+ARO_BASE = 0.2
+VAL_HALF = 30.0         # valence half-life toward baseline (s)
+ARO_HALF = 7.0          # arousal half-life toward baseline (s)
+LN2 = math.log(2.0)
+# impulses: (valence bump, arousal bump) applied once when the event fires
+IMP_STARTLE = (-0.4, 0.6)    # the cursor jerked at him
+IMP_NOVELTY = (0.1, 0.3)     # noticed something new (today: the cursor)
+IMP_INSPECTED = (0.15, 0.0)  # finished sizing something up (habituated)
+IMP_ERASURE = (-0.2, 0.2)    # searched, found nothing (wired in Phase E)
+IMP_TRUST_UP = (0.2, 0.0)    # trust milestone crossed (wired in Phase F)
+# pressures: per-second drift while the condition holds
+P_CALM_COMPANY = 0.02        # valence/s near a calm cursor; needs trust >~0.5
+P_PROWL = (-0.06, 0.25)      # (valence, arousal)/s: fast cursor prowling near
+P_LOW_ENERGY = -0.02         # valence/s while energy < 0.25 (wired in Phase C)
+P_RESTING = (0.03, -0.10)    # (valence, arousal)/s while resting (Phase C)
+P_TRAPPED = (-0.05, 0.15)    # (valence, arousal)/s while enclosed (Phase D)
+# modulation: how the emotional point bends existing parameters
+ARO_SPEED_GAIN = 0.7    # speed/force multiplier slope per unit arousal
+ARO_STRIDE_GAIN = 0.35  # step-frequency slope per unit arousal (twitchy steps)
+ARO_TILT_GAIN = 1.5     # head-movement frequency slope per unit arousal
+VAL_BOUNCE = 0.9        # extra walk-bob amplitude at full positive valence
+VAL_STRIDE = 0.3        # stride amplitude lost at full slump
+VAL_SLUMP_LEAN = 0.13   # forward hunch (rad) at full negative valence
+VAL_SLUMP_DROP = 4.0    # shoulder sag (px) at full negative valence
+AFRAID_FLEE = 0.6       # flee distance grows this fraction at full fear
+AFRAID_SPOOK = 0.45     # startle speed threshold drops this fraction
+AFRAID_HESITATE = 1.5   # approach hesitation pauses lengthen this fraction
+AFRAID_BLOCK = 0.15     # no re-approach while the afraid weight exceeds this
+EXCITE_BURST = 0.7      # approach bursts lengthen this fraction
+EXCITE_CLOSE = 0.25     # stopping distance shrinks this fraction
+CONTENT_SLOW = 0.3      # wander speed drops this fraction when content
+CONTENT_PAUSE = 1.0     # idle pauses lengthen this fraction when content
+CONTENT_SWAY = 1.6      # idle weight-shift sway grows this fraction
+DEJECT_IGNORE = 0.5     # notice radius shrinks this fraction when dejected
+CURIO_VAL_GAIN = 0.35   # curiosity gain-rate slope with valence
+
 # ------------------------------------------------------------ emotion pose --
 EMO_TAU = 0.25          # pose-parameter smoothing (s) — blended, never snapped
-FEAR_DECAY = 0.22       # fear halves in ~3 s of calm
-FEAR_CREEP = 1.2        # fear/s while a moderately fast cursor prowls nearby
 CURIOUS_DELAY = 0.8     # calm watching before curiosity starts building (s)
 CURIOUS_RAMP = 2.5      # seconds for curiosity to saturate
 CURIOUS_DROP = 1.5      # curiosity lost per second once the cursor moves
@@ -142,8 +185,16 @@ class Man:
         self.breath_t = random.uniform(0, 10)
         self.look = Vector2(1, 0)    # unit-ish gaze direction for the head
 
-        # emotion state (drives posture; read by Skeleton)
-        self.fear = 0.0              # 0..1: spikes on startle, decays with calm
+        # emotion: continuous valence-arousal point, never a discrete state
+        self.valence = VAL_BASE      # -1 distressed .. +1 content (slow mood)
+        self.arousal = ARO_BASE      # 0 calm .. 1 activated (fast weather)
+        self.afraid = 0.0            # smooth corner weights derived per frame
+        self.excited = 0.0
+        self.content = 0.0
+        self.dejected = 0.0
+        self.speed_gain = 1.0        # arousal-driven speed/force multiplier
+        self.inspected = False       # this encounter reached full curiosity
+
         self.curious = 0.0           # 0..1: builds while watching a calm cursor
         self.trust = 0.2             # 0..1: placeholder until Phase F drives it
         self.alert_span = 0.0        # how long this alert freeze lasts
@@ -152,6 +203,8 @@ class Man:
         self.tilt = 0.0
         self.reach = 0.0
         self.guard = 0.0
+        self.slump = 0.0             # smoothed -valence posture weight
+        self.bounce = 0.0            # smoothed +valence posture weight
 
     # ------------------------------------------------------------ helpers --
     def _track_cursor(self, cursor, dt):
@@ -185,31 +238,85 @@ class Man:
             self.state_time = 0.0
             if state in (WANDER, APPROACH):
                 self.moving = True
-                span = WALK_SPAN if state == WANDER else BURST_SPAN
-                self.move_timer = random.uniform(*span)
+                self.move_timer = self._move_span()
                 if state == WANDER:
                     self._pick_heading(self.prev_cursor)
             elif state == ALERT:
                 self.alert_span = random.uniform(*ALERT_SPAN)
 
+    def _move_span(self):
+        """Duration of the next move/pause leg, stretched by the mood: content
+        lingers in pauses, excitement lengthens bursts, fear lengthens the
+        hesitation between bursts."""
+        if self.state == WANDER:
+            if self.moving:
+                return random.uniform(*WALK_SPAN)
+            return random.uniform(*PAUSE_SPAN) * (
+                1 + CONTENT_PAUSE * self.content)
+        if self.moving:
+            return random.uniform(*BURST_SPAN) * (1 + EXCITE_BURST * self.excited)
+        return random.uniform(*BURST_REST) * (1 + AFRAID_HESITATE * self.afraid)
+
+    def _impulse(self, imp):
+        """Apply one (valence, arousal) event bump, clamped to range."""
+        self.valence = max(-1.0, min(1.0, self.valence + imp[0]))
+        self.arousal = max(0.0, min(1.0, self.arousal + imp[1]))
+
+    def _mood(self, cursor, dt):
+        """Advance the valence-arousal point: continuous pressures, decay
+        toward baseline, then the smooth corner weights everything reads."""
+        dist = self.pos.distance_to(cursor)
+        if dist < NEAR_DIST:
+            if self.cursor_speed > SLOW_CURSOR:
+                # something quick prowling close is unnerving
+                self.valence += P_PROWL[0] * dt
+                self.arousal += P_PROWL[1] * dt
+            else:
+                # calm company feels good — but only once trust is earned
+                t = max(0.0, min(1.0, (self.trust - 0.4) / 0.3))
+                self.valence += P_CALM_COMPANY * t * dt
+        # (energy/rest pressures land with Phase C, enclosure with Phase D)
+
+        self.valence = VAL_BASE + (self.valence - VAL_BASE) * math.exp(
+            -LN2 * dt / VAL_HALF)
+        self.arousal = ARO_BASE + (self.arousal - ARO_BASE) * math.exp(
+            -LN2 * dt / ARO_HALF)
+        self.valence = max(-1.0, min(1.0, self.valence))
+        self.arousal = max(0.0, min(1.0, self.arousal))
+
+        v, a = self.valence, self.arousal
+        self.afraid = max(0.0, -v) * a
+        self.excited = max(0.0, v) * a
+        self.content = max(0.0, v) * (1.0 - a)
+        self.dejected = max(0.0, -v) * (1.0 - a)
+        self.speed_gain = 1.0 + ARO_SPEED_GAIN * (a - ARO_BASE)
+
     def _transitions(self, cursor):
         dist = self.pos.distance_to(cursor)
         bored = self.cursor_idle_s > LOSE_INTEREST_S
+        # emotion bends the trigger thresholds, smoothly, but never picks the
+        # behavior itself: afraid = hair-trigger startle, dejected = oblivious
+        spook_speed = FAST_CURSOR * (1 - AFRAID_SPOOK * self.afraid)
+        notice_dist = NEAR_DIST * (1 - DEJECT_IGNORE * self.dejected)
+        stop_dist = STOP_DIST * (1 - EXCITE_CLOSE * self.excited)
 
         # startle overrides everything
-        if (self.state != FLEE and self.cursor_speed > FAST_CURSOR
+        if (self.state != FLEE and self.cursor_speed > spook_speed
                 and dist < STARTLE_DIST):
             self._set_state(FLEE)
-            self.fear = 1.0
+            self._impulse(IMP_STARTLE)
             self.stumble_vel += STUMBLE_KICK * (1 if self.vel.x <= 0 else -1)
             return
 
         if self.state == FLEE:
-            if dist > SAFE_DIST and self.state_time > MIN_FLEE_S:
+            safe = SAFE_DIST * (1 + AFRAID_FLEE * self.afraid)
+            if dist > safe and self.state_time > MIN_FLEE_S:
                 self._set_state(WATCH)  # pull up and look back warily
         elif self.state == WANDER:
-            if dist < NEAR_DIST and self.cursor_speed < SLOW_CURSOR and not bored:
+            if dist < notice_dist and self.cursor_speed < SLOW_CURSOR and not bored:
                 self._set_state(ALERT)  # freeze first: "what is that?"
+                self._impulse(IMP_NOVELTY)
+                self.inspected = False
         elif self.state == ALERT:
             if dist > NEAR_DIST or bored:
                 self._set_state(WANDER)
@@ -218,23 +325,30 @@ class Man:
         elif self.state == APPROACH:
             if dist > NEAR_DIST or bored:
                 self._set_state(WANDER)
-            elif dist < STOP_DIST + 4:
+            elif dist < stop_dist + 4:
                 self._set_state(WATCH)
         elif self.state == WATCH:
             if dist > NEAR_DIST or bored:
+                if bored and self.inspected:
+                    # sized it up and satisfied: a small win
+                    self._impulse(IMP_INSPECTED)
+                    self.inspected = False
                 self._set_state(WANDER)
-            elif (dist > STOP_DIST + 30 and self.cursor_speed < SLOW_CURSOR
-                    and self.fear < 0.5):  # too rattled to close in again yet
+            elif (dist > stop_dist + 30 and self.cursor_speed < SLOW_CURSOR
+                    and self.afraid < AFRAID_BLOCK):  # too rattled to close in
                 self._set_state(APPROACH)
 
     def _desired_velocity(self, cursor, dt):
-        """Each behavior expresses itself as a velocity it would like to have."""
+        """Each behavior expresses itself as a velocity it would like to have.
+        Arousal scales every speed and force: calm = languid, activated =
+        twitchy."""
         to_cursor = cursor - self.pos
         dist = to_cursor.length()
+        g = self.speed_gain
 
         if self.state == FLEE:
             away = -to_cursor / dist if dist > 1e-6 else Vector2(1, 0)
-            return away * FLEE_SPEED, FLEE_FORCE
+            return away * FLEE_SPEED * g, FLEE_FORCE * g
 
         if self.state == WATCH:
             return Vector2(), WATCH_FORCE  # brake to a standstill
@@ -249,21 +363,18 @@ class Man:
         self.move_timer -= dt
         if self.move_timer <= 0:
             self.moving = not self.moving
-            if self.state == WANDER:
-                span = WALK_SPAN if self.moving else PAUSE_SPAN
-                if self.moving:
-                    self._pick_heading(cursor)
-            else:
-                span = BURST_SPAN if self.moving else BURST_REST
-            self.move_timer = random.uniform(*span)
+            if self.state == WANDER and self.moving:
+                self._pick_heading(cursor)
+            self.move_timer = self._move_span()
         if not self.moving:
             return Vector2(), WANDER_FORCE
 
         if self.state == APPROACH:
-            # ease off over the last 80 px so he settles at STOP_DIST
-            ease = max(0.0, min(1.0, (dist - STOP_DIST) / 80.0))
+            # ease off over the last 80 px so he settles at the stop distance
+            stop = STOP_DIST * (1 - EXCITE_CLOSE * self.excited)
+            ease = max(0.0, min(1.0, (dist - stop) / 80.0))
             direction = to_cursor / dist if dist > 1e-6 else Vector2()
-            return direction * APPROACH_SPEED * ease, APPROACH_FORCE
+            return direction * APPROACH_SPEED * g * ease, APPROACH_FORCE * g
 
         # WANDER: hold a per-segment heading, turning toward it in a smooth arc
         # with only gentle drift — never Brownian back-and-forth pacing
@@ -276,8 +387,9 @@ class Man:
             va = math.atan2(self.vel.y, self.vel.x)
             adrift = (va - self.heading + math.pi) % (2 * math.pi) - math.pi
             self.heading += adrift * min(1.0, 0.8 * dt)
+        stroll = WANDER_SPEED * g * (1 - CONTENT_SLOW * self.content)
         return (Vector2(math.cos(self.heading), math.sin(self.heading))
-                * WANDER_SPEED, WANDER_FORCE)
+                * stroll, WANDER_FORCE * g)
 
     def _edge_bias(self):
         """Inward velocity bias that ramps up near walls: turns, never bounces."""
@@ -296,6 +408,7 @@ class Man:
         self.state_time += dt
         self.breath_t += dt
         self._track_cursor(cursor, dt)
+        self._mood(cursor, dt)
         self._transitions(cursor)
 
         desired, max_force = self._desired_velocity(cursor, dt)
@@ -309,8 +422,9 @@ class Man:
         self.steer += (steer_target - self.steer) * blend
 
         self.vel += self.steer * dt
-        if self.vel.length() > FLEE_SPEED:
-            self.vel.scale_to_length(FLEE_SPEED)
+        cap = FLEE_SPEED * max(1.0, self.speed_gain)
+        if self.vel.length() > cap:
+            self.vel.scale_to_length(cap)
         if self.vel.length() < 1.5 and desired.length() < 1e-6:
             self.vel = Vector2()  # settle fully: no micro-jitter while standing
         self.pos += self.vel * dt
@@ -324,8 +438,10 @@ class Man:
     def _animate(self, cursor, dt):
         speed = self.vel.length()
 
-        # walk phase advances with distance traveled, so stride matches speed
-        self.phase += speed * dt * PHASE_RATE
+        # walk phase advances with distance traveled, so stride matches speed;
+        # arousal quickens the step rate (shorter, twitchier strides)
+        self.phase += speed * dt * PHASE_RATE * (
+            1 + ARO_STRIDE_GAIN * (self.arousal - ARO_BASE))
 
         # facing: velocity while moving; the cursor while standing watchful.
         # A deadband on vel.x keeps him from flip-flopping on shallow arcs.
@@ -348,7 +464,9 @@ class Man:
         self.stumble += self.stumble_vel * dt
 
         self._emote(cursor, dt)
-        self.lean = lean + self.stumble + self.lean_emo
+        # low valence hunches him forward on top of whatever else he's doing
+        self.lean = (lean + self.stumble + self.lean_emo
+                     + VAL_SLUMP_LEAN * self.slump * self.facing)
 
         # gaze: the cursor when engaged with it (a glance back mid-flee),
         # otherwise straight ahead
@@ -360,36 +478,35 @@ class Man:
             self.look = Vector2(self.facing, 0)
 
     def _emote(self, cursor, dt):
-        """Update fear/curiosity and blend the posture they call for."""
+        """Update curiosity and blend the posture the mood calls for."""
         dist = self.pos.distance_to(cursor)
 
-        # fear: creeps while a moderately fast cursor prowls nearby, decays calm
-        if (self.cursor_speed > SLOW_CURSOR and dist < NEAR_DIST
-                and self.state in (ALERT, APPROACH, WATCH)):
-            self.fear = min(1.0, self.fear + FEAR_CREEP * dt)
-        self.fear *= math.exp(-FEAR_DECAY * dt)
-
-        # curiosity: builds only while calmly watching; any motion resets it
+        # curiosity: builds only while calmly watching; any motion resets it.
+        # Its gain rate rides on valence: a distressed creature explores less.
         if (self.state == WATCH and self.cursor_speed < SLOW_CURSOR
                 and self.state_time > CURIOUS_DELAY):
-            self.curious = min(1.0, self.curious + dt / CURIOUS_RAMP)
+            gain = (1 + CURIO_VAL_GAIN * self.valence) / CURIOUS_RAMP
+            self.curious = min(1.0, self.curious + gain * dt)
+            if self.curious > 0.6:
+                self.inspected = True  # a full look counts as an inspection
         else:
             self.curious = max(0.0, self.curious - CURIOUS_DROP * dt)
 
         toward = 1.0 if cursor.x >= self.pos.x else -1.0
-        f = self.fear
+        f = self.afraid  # the fear corner of the valence-arousal plane
         c = self.curious * (1.0 - f)  # fear overrides curiosity
         t_crouch = t_lean = t_tilt = t_reach = t_guard = 0.0
         if self.state == ALERT:
             t_crouch, t_lean = 0.12, -LEAN_WARY * toward
         elif self.state == APPROACH:
-            t_crouch = 0.18 + 0.3 * f
+            t_crouch = 0.18 + 0.4 * f
             t_lean = toward * (0.05 - LEAN_WARY * f)
         elif self.state == WATCH:
-            t_crouch = 0.3 * f + 0.1 * c
+            t_crouch = 0.4 * f + 0.1 * c
             t_lean = toward * (LEAN_CURIOUS * c - LEAN_WARY * f)
+            tilt_hz = TILT_FREQ * (1 + ARO_TILT_GAIN * (self.arousal - ARO_BASE))
             t_tilt = TILT_AMP * c * math.sin(
-                self.state_time * 2 * math.pi * TILT_FREQ)
+                self.state_time * 2 * math.pi * tilt_hz)
             if dist < REACH_DIST:
                 t_reach = max(0.0, (c - 0.35) / 0.65)
         elif self.state == FLEE:
@@ -401,6 +518,8 @@ class Man:
         self.tilt += (t_tilt - self.tilt) * blend
         self.reach += (t_reach - self.reach) * blend
         self.guard += (t_guard - self.guard) * blend
+        self.slump += (max(0.0, -self.valence) - self.slump) * blend
+        self.bounce += (max(0.0, self.valence) - self.bounce) * blend
 
 
 class Skeleton:
@@ -413,21 +532,28 @@ class Skeleton:
         f = man.facing
         ph = man.phase
         lean = man.lean
-        stride = min(MAX_STRIDE, speed * STRIDE_PER_SPEED)
+        # low valence shortens the stride; positive valence bounces the step
+        stride = min(MAX_STRIDE, speed * STRIDE_PER_SPEED) * (
+            1 - VAL_STRIDE * man.slump)
+        bob = 1.4 * (1 + VAL_BOUNCE * man.bounce)
 
         breath = math.sin(man.breath_t * 2 * math.pi * BREATH_FREQ)
-        sway = math.sin(man.breath_t * 0.7) * SWAY_AMP * idle
+        # contentment reads as a slow idle weight shift (bigger hip sway)
+        sway = (math.sin(man.breath_t * 0.7) * SWAY_AMP * idle
+                * (1 + CONTENT_SWAY * man.content))
 
         # hip: the anchor. Bobs slightly with each step (twice per cycle).
         # Crouching shortens the hip-to-foot drop so the feet stay planted.
         leg_drop = LEG_LEN * (1 - CROUCH_DROP * man.crouch)
         hip = Vector2(man.pos.x + sway,
-                      man.pos.y - leg_drop + abs(math.sin(ph)) * 1.4 * walk)
+                      man.pos.y - leg_drop + abs(math.sin(ph)) * bob * walk)
 
-        # spine tilts by the lean angle; chest rises with idle breathing
+        # spine tilts by the lean angle; chest rises with idle breathing and
+        # sags when he's slumped (shoulders drop, head rides down with them)
         up = Vector2(math.sin(lean), -math.cos(lean))
-        neck = hip + up * (SPINE_LEN + breath * BREATH_AMP * idle)
-        shoulder = hip + up * (SPINE_LEN * 0.86 + breath * BREATH_AMP * idle)
+        sag = VAL_SLUMP_DROP * man.slump
+        neck = hip + up * (SPINE_LEN - sag + breath * BREATH_AMP * idle)
+        shoulder = hip + up * (SPINE_LEN * 0.86 - sag + breath * BREATH_AMP * idle)
 
         # head sits past the neck, shifts a little toward the gaze, and cocks
         # sideways (perpendicular to the spine) when he's curious
@@ -476,39 +602,60 @@ class Skeleton:
             pygame.draw.line(surf, WHITE, elbow, hand, LINE_W)
 
 
+def emotion_region(valence, arousal):
+    """Debug-only label for the nearest emotion region. The creature's code
+    must never read this — it exists purely for tuning the overlay."""
+    if math.hypot(valence, arousal - ARO_BASE) < 0.18:
+        return "neutral"
+    if arousal >= 0.45:
+        return "afraid" if valence < 0 else "excited"
+    return "dejected" if valence < 0 else "content"
+
+
 class DebugOverlay:
     """Live bars for the man's internal state, top-left. D toggles it.
 
-    Adding a bar is one line in self.bars: a (label, getter) pair where the
-    getter returns a 0..1 value.
+    Adding a bar is one line in self.bars: a (label, getter, centered) tuple.
+    Plain bars fill 0..1 from the left; a centered bar takes -1..1 and fills
+    outward from the middle (right = positive, left = negative).
     """
 
     def __init__(self, man):
         self.font = pygame.font.Font(None, DEBUG_FONT_PT)
         self.man = man
         self.bars = [
-            ("speed", lambda: man.vel.length() / FLEE_SPEED),
-            ("fear", lambda: man.fear),
-            ("curious", lambda: man.curious),
-            ("trust", lambda: man.trust),
+            ("speed", lambda: man.vel.length() / FLEE_SPEED, False),
+            ("valence", lambda: man.valence, True),
+            ("arousal", lambda: man.arousal, False),
+            ("curious", lambda: man.curious, False),
+            ("trust", lambda: man.trust, False),
         ]
 
     def draw(self, surf):
         y = BAR_MARGIN
-        state = self.font.render("state: " + self.man.state, True, WHITE)
-        surf.blit(state, (BAR_MARGIN, y))
-        y += state.get_height() + BAR_GAP
-
         x = BAR_MARGIN + BAR_LABEL_W
-        for label, get in self.bars:
-            v = max(0.0, min(1.0, get()))
+        inner = BAR_W - 2  # the fill sits flush against the 1px outline
+        for label, get, centered in self.bars:
             text = self.font.render(label, True, WHITE)
             surf.blit(text, (BAR_MARGIN, y + (BAR_H - text.get_height()) // 2))
             pygame.draw.rect(surf, WHITE, (x, y, BAR_W, BAR_H), 1)
-            fill = round((BAR_W - 4) * v)
-            if fill > 0:
-                pygame.draw.rect(surf, WHITE, (x + 2, y + 2, fill, BAR_H - 4))
+            if centered:
+                v = max(-1.0, min(1.0, get()))
+                fill = round(inner / 2 * abs(v))
+                mid = x + BAR_W // 2
+                left = mid if v >= 0 else mid - fill
+                if fill > 0:
+                    pygame.draw.rect(surf, WHITE, (left, y + 1, fill, BAR_H - 2))
+                pygame.draw.rect(surf, WHITE, (mid, y, 1, BAR_H))  # zero tick
+            else:
+                fill = round(inner * max(0.0, min(1.0, get())))
+                if fill > 0:
+                    pygame.draw.rect(surf, WHITE, (x + 1, y + 1, fill, BAR_H - 2))
             y += BAR_H + BAR_GAP
+
+        mood = emotion_region(self.man.valence, self.man.arousal)
+        surf.blit(self.font.render("mood: " + mood, True, WHITE),
+                  (BAR_MARGIN, y))
 
 
 def main():
