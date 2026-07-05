@@ -22,9 +22,20 @@ full toy per DESIGN.md.
 - Soft edge avoidance (inward velocity bias inside a 90px margin) plus a hard
   safety clamp; headless chase tests never push him off screen.
 - Transitions blend via ~0.5s exponential steering smoothing — no snapping.
+- Wander holds a per-segment heading (smooth arcs, no Brownian back-and-forth);
+  on losing interest he strolls away from the cursor and ignores it until it
+  moves again — fixes the pacing-beside-a-still-cursor bug (user feedback).
+- Emotion layer: fear (spikes on startle, creeps near a prowling cursor, ~3s
+  half-life) and curiosity (builds while calmly watching, collapses on cursor
+  motion) drive crouch, toward/away torso lean, side-to-side head cock, a
+  reaching near hand (<110px, high curiosity), and arms-up guard during flee.
+- ALERT state: on first noticing the cursor he recoils a half-step, freezes
+  0.5–1.1s facing it, then starts the cautious approach. High fear blocks
+  re-approaching from watch until it decays.
 
-Verified with a headless harness (state transitions, stop distances, window
-bounds, NaN checks) and rendered pose contact sheets; both pass/look correct.
+Verified with a headless harness (state transitions incl. alert, curiosity/
+fear arcs, reach, bored walk-off, wander reversal rate, bounds, NaN checks)
+and zoomed pose contact sheets; all pass/read correctly.
 
 ## What's tuned
 
@@ -35,14 +46,15 @@ bounds, NaN checks) and rendered pose contact sheets; both pass/look correct.
 
 ## What's broken
 
-- Nothing known. Not yet eyeballed in a live window (verified headlessly only), so
-  feel-tuning (speeds, stumble strength, breathing amplitude) may want a pass after
-  human viewing.
+- Nothing known. The emotion layer is new and only verified headlessly — its
+  feel (lean/crouch amounts, curiosity ramp speed, alert length) needs a live
+  viewing pass.
 - Machine oddity, not app: root-level .md files were deleted from disk twice by
   something outside git during setup (restored from git). Watch for recurrence.
 
 ## What's next
 
-- Watch it live and feel-tune constants (stride, lean, flee speed, pause pacing).
+- Watch the emotion arc live (notice → alert → creep up → peer/reach → stroll
+  off; jerk → panic flee) and feel-tune the emotion constants.
 - Possible polish (would need a DECISIONS entry first): shadow dot under feet,
   window icon.

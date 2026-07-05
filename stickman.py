@@ -51,7 +51,7 @@ FAST_CURSOR = 700.0     # cursor faster than this = startling (px/s)
 STARTLE_DIST = 300.0    # fast cursor only startles within this range
 SAFE_DIST = 350.0       # stop fleeing once this far from the cursor
 STOP_DIST = 50.0        # approach stops this far from the cursor
-LOSE_INTEREST_S = 5.0   # cursor idle this long -> resume wandering
+LOSE_INTEREST_S = 9.0   # cursor idle this long -> lose interest, stroll off
 CURSOR_IDLE_SPEED = 6.0  # below this the cursor counts as idle (px/s)
 SPEED_SAMPLES = 10      # frames averaged for smoothed cursor speed
 MIN_FLEE_S = 0.4        # flee at least this long so the stumble reads
@@ -81,8 +81,25 @@ WALK_SPAN = (3.0, 8.0)           # seconds of walking between pauses
 PAUSE_SPAN = (1.0, 3.0)          # seconds of standing during a pause
 BURST_SPAN = (0.35, 0.8)         # approach: seconds of moving per burst
 BURST_REST = (0.3, 0.7)          # approach: seconds of pausing per burst
+ALERT_SPAN = (0.5, 1.1)          # seconds frozen sizing up a new cursor
 
-WANDER, APPROACH, WATCH, FLEE = "wander", "approach", "watch", "flee"
+# ------------------------------------------------------------ emotion pose --
+EMO_TAU = 0.25          # pose-parameter smoothing (s) — blended, never snapped
+FEAR_DECAY = 0.22       # fear halves in ~3 s of calm
+FEAR_CREEP = 1.2        # fear/s while a moderately fast cursor prowls nearby
+CURIOUS_DELAY = 0.8     # calm watching before curiosity starts building (s)
+CURIOUS_RAMP = 2.5      # seconds for curiosity to saturate
+CURIOUS_DROP = 1.5      # curiosity lost per second once the cursor moves
+CROUCH_DROP = 0.16      # leg-length fraction the hips drop at full crouch
+LEAN_CURIOUS = 0.17     # lean toward the cursor at full curiosity (rad)
+LEAN_WARY = 0.13        # lean away from the cursor when fearful/alert (rad)
+TILT_AMP = 3.2          # head-cock offset at full curiosity (px)
+TILT_FREQ = 0.22        # head cocks side to side this often (Hz)
+REACH_DIST = 110.0      # the hand only reaches out within this range
+GUARD_RAISE = 0.8       # how high the hands come up in a flee (fraction of arm)
+
+WANDER, ALERT, APPROACH, WATCH, FLEE = (
+    "wander", "alert", "approach", "watch", "flee")
 
 
 class Man:
@@ -116,6 +133,16 @@ class Man:
         self.stumble_vel = 0.0
         self.breath_t = random.uniform(0, 10)
         self.look = Vector2(1, 0)    # unit-ish gaze direction for the head
+
+        # emotion state (drives posture; read by Skeleton)
+        self.fear = 0.0              # 0..1: spikes on startle, decays with calm
+        self.curious = 0.0           # 0..1: builds while watching a calm cursor
+        self.alert_span = 0.0        # how long this alert freeze lasts
+        self.crouch = 0.0            # smoothed pose params
+        self.lean_emo = 0.0
+        self.tilt = 0.0
+        self.reach = 0.0
+        self.guard = 0.0
 
     # ------------------------------------------------------------ helpers --
     def _track_cursor(self, cursor, dt):
@@ -153,6 +180,8 @@ class Man:
                 self.move_timer = random.uniform(*span)
                 if state == WANDER:
                     self._pick_heading(self.prev_cursor)
+            elif state == ALERT:
+                self.alert_span = random.uniform(*ALERT_SPAN)
 
     def _transitions(self, cursor):
         dist = self.pos.distance_to(cursor)
@@ -162,6 +191,7 @@ class Man:
         if (self.state != FLEE and self.cursor_speed > FAST_CURSOR
                 and dist < STARTLE_DIST):
             self._set_state(FLEE)
+            self.fear = 1.0
             self.stumble_vel += STUMBLE_KICK * (1 if self.vel.x <= 0 else -1)
             return
 
@@ -170,6 +200,11 @@ class Man:
                 self._set_state(WATCH)  # pull up and look back warily
         elif self.state == WANDER:
             if dist < NEAR_DIST and self.cursor_speed < SLOW_CURSOR and not bored:
+                self._set_state(ALERT)  # freeze first: "what is that?"
+        elif self.state == ALERT:
+            if dist > NEAR_DIST or bored:
+                self._set_state(WANDER)
+            elif self.state_time > self.alert_span:
                 self._set_state(APPROACH)
         elif self.state == APPROACH:
             if dist > NEAR_DIST or bored:
@@ -179,7 +214,8 @@ class Man:
         elif self.state == WATCH:
             if dist > NEAR_DIST or bored:
                 self._set_state(WANDER)
-            elif dist > STOP_DIST + 30 and self.cursor_speed < SLOW_CURSOR:
+            elif (dist > STOP_DIST + 30 and self.cursor_speed < SLOW_CURSOR
+                    and self.fear < 0.5):  # too rattled to close in again yet
                 self._set_state(APPROACH)
 
     def _desired_velocity(self, cursor, dt):
@@ -193,6 +229,12 @@ class Man:
 
         if self.state == WATCH:
             return Vector2(), WATCH_FORCE  # brake to a standstill
+
+        if self.state == ALERT:
+            if self.state_time < 0.25 and dist > 1e-6:
+                # a startled half-step back before freezing
+                return -to_cursor / dist * 30.0, WATCH_FORCE
+            return Vector2(), WATCH_FORCE
 
         # wander and approach alternate moving with standing still
         self.move_timer -= dt
@@ -280,7 +322,7 @@ class Man:
         # A deadband on vel.x keeps him from flip-flopping on shallow arcs.
         if speed > 10 and abs(self.vel.x) > 8:
             target = 1.0 if self.vel.x >= 0 else -1.0
-        elif self.state in (WATCH, APPROACH):
+        elif self.state in (WATCH, APPROACH, ALERT):
             target = 1.0 if cursor.x >= self.pos.x else -1.0
         else:
             target = 1.0 if self.facing >= 0 else -1.0
@@ -295,15 +337,61 @@ class Man:
         acc = -STUMBLE_K * self.stumble - STUMBLE_C * self.stumble_vel
         self.stumble_vel += acc * dt
         self.stumble += self.stumble_vel * dt
-        self.lean = lean + self.stumble
 
-        # gaze: the cursor when engaged with it, otherwise straight ahead
-        if self.state in (WATCH, APPROACH):
+        self._emote(cursor, dt)
+        self.lean = lean + self.stumble + self.lean_emo
+
+        # gaze: the cursor when engaged with it (a glance back mid-flee),
+        # otherwise straight ahead
+        if self.state in (WATCH, APPROACH, ALERT, FLEE):
             to_c = cursor - self.pos
             if to_c.length() > 1e-6:
                 self.look = to_c.normalize()
         else:
             self.look = Vector2(self.facing, 0)
+
+    def _emote(self, cursor, dt):
+        """Update fear/curiosity and blend the posture they call for."""
+        dist = self.pos.distance_to(cursor)
+
+        # fear: creeps while a moderately fast cursor prowls nearby, decays calm
+        if (self.cursor_speed > SLOW_CURSOR and dist < NEAR_DIST
+                and self.state in (ALERT, APPROACH, WATCH)):
+            self.fear = min(1.0, self.fear + FEAR_CREEP * dt)
+        self.fear *= math.exp(-FEAR_DECAY * dt)
+
+        # curiosity: builds only while calmly watching; any motion resets it
+        if (self.state == WATCH and self.cursor_speed < SLOW_CURSOR
+                and self.state_time > CURIOUS_DELAY):
+            self.curious = min(1.0, self.curious + dt / CURIOUS_RAMP)
+        else:
+            self.curious = max(0.0, self.curious - CURIOUS_DROP * dt)
+
+        toward = 1.0 if cursor.x >= self.pos.x else -1.0
+        f = self.fear
+        c = self.curious * (1.0 - f)  # fear overrides curiosity
+        t_crouch = t_lean = t_tilt = t_reach = t_guard = 0.0
+        if self.state == ALERT:
+            t_crouch, t_lean = 0.12, -LEAN_WARY * toward
+        elif self.state == APPROACH:
+            t_crouch = 0.18 + 0.3 * f
+            t_lean = toward * (0.05 - LEAN_WARY * f)
+        elif self.state == WATCH:
+            t_crouch = 0.3 * f + 0.1 * c
+            t_lean = toward * (LEAN_CURIOUS * c - LEAN_WARY * f)
+            t_tilt = TILT_AMP * c * math.sin(
+                self.state_time * 2 * math.pi * TILT_FREQ)
+            if dist < REACH_DIST:
+                t_reach = max(0.0, (c - 0.35) / 0.65)
+        elif self.state == FLEE:
+            t_crouch, t_guard = 0.25, 1.0
+
+        blend = min(1.0, dt / EMO_TAU)
+        self.crouch += (t_crouch - self.crouch) * blend
+        self.lean_emo += (t_lean - self.lean_emo) * blend
+        self.tilt += (t_tilt - self.tilt) * blend
+        self.reach += (t_reach - self.reach) * blend
+        self.guard += (t_guard - self.guard) * blend
 
 
 class Skeleton:
@@ -322,16 +410,20 @@ class Skeleton:
         sway = math.sin(man.breath_t * 0.7) * SWAY_AMP * idle
 
         # hip: the anchor. Bobs slightly with each step (twice per cycle).
+        # Crouching shortens the hip-to-foot drop so the feet stay planted.
+        leg_drop = LEG_LEN * (1 - CROUCH_DROP * man.crouch)
         hip = Vector2(man.pos.x + sway,
-                      man.pos.y - LEG_LEN + abs(math.sin(ph)) * 1.4 * walk)
+                      man.pos.y - leg_drop + abs(math.sin(ph)) * 1.4 * walk)
 
         # spine tilts by the lean angle; chest rises with idle breathing
         up = Vector2(math.sin(lean), -math.cos(lean))
         neck = hip + up * (SPINE_LEN + breath * BREATH_AMP * idle)
         shoulder = hip + up * (SPINE_LEN * 0.86 + breath * BREATH_AMP * idle)
 
-        # head sits past the neck and shifts a little toward the gaze
-        head = neck + up * (HEAD_R + 1) + man.look * 2.5
+        # head sits past the neck, shifts a little toward the gaze, and cocks
+        # sideways (perpendicular to the spine) when he's curious
+        perp = Vector2(-up.y, up.x)
+        head = neck + up * (HEAD_R + 1) + man.look * 2.5 + perp * man.tilt
         head.y += breath * 0.6 * idle
 
         pygame.draw.line(surf, WHITE, hip, neck, LINE_W)
@@ -342,10 +434,11 @@ class Skeleton:
             # leg: swing angle from vertical; the forward-swinging leg lifts
             a = math.sin(ph) * stride * s + IDLE_SPLAY * s * idle
             lift = max(0.0, math.cos(ph) * s) * FOOT_LIFT * walk
-            foot = Vector2(hip.x + math.sin(a) * LEG_LEN * f,
-                           hip.y + math.cos(a) * LEG_LEN - lift)
+            foot = Vector2(hip.x + math.sin(a) * leg_drop * f,
+                           hip.y + math.cos(a) * leg_drop - lift)
             knee = (hip + foot) / 2
-            knee.x += f * (1.3 + lift * 0.9)  # knees always bend forward
+            # knees always bend forward; a crouch bends them further
+            knee.x += f * (1.3 + lift * 0.9 + man.crouch * 3.5)
             pygame.draw.line(surf, WHITE, hip, knee, LINE_W)
             pygame.draw.line(surf, WHITE, knee, foot, LINE_W)
 
@@ -353,8 +446,23 @@ class Skeleton:
             b = math.sin(ph + math.pi) * stride * ARM_SWING * s
             hand = Vector2(shoulder.x + math.sin(b) * ARM_LEN * f + s * 2 * idle,
                            shoulder.y + math.cos(b) * ARM_LEN)
+            elbow_bias = -f * (1.0 + abs(math.sin(b)) * 2.0)  # elbows trail back
+
+            if s == 1 and man.reach > 0.01:
+                # curiosity: the near hand stretches out toward the cursor
+                reach_to = shoulder + man.look * (ARM_LEN * 0.95)
+                hand = hand.lerp(reach_to, man.reach)
+                elbow_bias *= 1 - man.reach  # a reaching arm straightens
+
+            if man.guard > 0.01:
+                # panic: both hands come up beside the head, elbows flared
+                guard_to = shoulder + Vector2(s * 4 - f * 2,
+                                              -ARM_LEN * GUARD_RAISE)
+                hand = hand.lerp(guard_to, man.guard)
+                elbow_bias = elbow_bias * (1 - man.guard) + s * 5 * man.guard
+
             elbow = (shoulder + hand) / 2
-            elbow.x -= f * (1.0 + abs(math.sin(b)) * 2.0)  # elbows trail back
+            elbow.x += elbow_bias
             pygame.draw.line(surf, WHITE, shoulder, elbow, LINE_W)
             pygame.draw.line(surf, WHITE, elbow, hand, LINE_W)
 
