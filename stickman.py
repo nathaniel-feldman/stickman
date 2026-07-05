@@ -74,7 +74,7 @@ SWAY_AMP = 1.3                   # idle hip sway (px)
 IDLE_SPLAY = 0.14                # idle stance: feet apart (rad)
 
 # ---------------------------------------------------------- wander pacing ---
-WANDER_JITTER = 2.6              # heading noise (rad/sqrt(s))
+WANDER_JITTER = 1.7              # heading noise (rad/sqrt(s))
 WALK_SPAN = (3.0, 8.0)           # seconds of walking between pauses
 PAUSE_SPAN = (1.0, 3.0)          # seconds of standing during a pause
 BURST_SPAN = (0.35, 0.8)         # approach: seconds of moving per burst
@@ -237,7 +237,7 @@ class Man:
 
         # hard safety clamp (edge bias should keep this from ever engaging)
         self.pos.x = max(BOUND_PAD, min(WIDTH - BOUND_PAD, self.pos.x))
-        self.pos.y = max(BOUND_PAD + 34, min(HEIGHT - BOUND_PAD, self.pos.y))
+        self.pos.y = max(BOUND_PAD + 44, min(HEIGHT - BOUND_PAD, self.pos.y))
 
         self._animate(cursor, dt)
 
@@ -301,7 +301,7 @@ class Skeleton:
         shoulder = hip + up * (SPINE_LEN * 0.86 + breath * BREATH_AMP * idle)
 
         # head sits past the neck and shifts a little toward the gaze
-        head = neck + up * (HEAD_R + 2) + man.look * 2.5
+        head = neck + up * (HEAD_R + 1) + man.look * 2.5
         head.y += breath * 0.6 * idle
 
         pygame.draw.line(surf, WHITE, hip, neck, LINE_W)
