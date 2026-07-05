@@ -74,7 +74,9 @@ SWAY_AMP = 1.3                   # idle hip sway (px)
 IDLE_SPLAY = 0.14                # idle stance: feet apart (rad)
 
 # ---------------------------------------------------------- wander pacing ---
-WANDER_JITTER = 1.7              # heading noise (rad/sqrt(s))
+WANDER_TURN = 1.8                # how fast heading turns toward its target (1/s)
+WANDER_NOISE = 0.3               # gentle heading drift while strolling (rad/sqrt(s))
+WANDER_TURN_SPAN = 1.1           # new segment target = old heading +- gauss(this)
 WALK_SPAN = (3.0, 8.0)           # seconds of walking between pauses
 PAUSE_SPAN = (1.0, 3.0)          # seconds of standing during a pause
 BURST_SPAN = (0.35, 0.8)         # approach: seconds of moving per burst
@@ -102,6 +104,7 @@ class Man:
 
         # wander / approach pacing
         self.heading = random.uniform(0, 2 * math.pi)
+        self.heading_target = self.heading
         self.moving = True
         self.move_timer = random.uniform(*WALK_SPAN)
 
@@ -127,6 +130,19 @@ class Man:
         else:
             self.cursor_idle_s += dt
 
+    def _pick_heading(self, cursor):
+        """Choose the next stroll heading: usually a moderate turn from the
+        current one; if he just lost interest in a nearby cursor, away from it."""
+        bored_near = (cursor is not None
+                      and self.cursor_idle_s > LOSE_INTEREST_S
+                      and self.pos.distance_to(cursor) < NEAR_DIST * 1.5)
+        if bored_near:
+            away = self.pos - cursor
+            self.heading_target = (math.atan2(away.y, away.x)
+                                   + random.uniform(-0.8, 0.8))
+        else:
+            self.heading_target = self.heading + random.gauss(0, WANDER_TURN_SPAN)
+
     def _set_state(self, state):
         if state != self.state:
             self.state = state
@@ -135,6 +151,8 @@ class Man:
                 self.moving = True
                 span = WALK_SPAN if state == WANDER else BURST_SPAN
                 self.move_timer = random.uniform(*span)
+                if state == WANDER:
+                    self._pick_heading(self.prev_cursor)
 
     def _transitions(self, cursor):
         dist = self.pos.distance_to(cursor)
@@ -182,6 +200,8 @@ class Man:
             self.moving = not self.moving
             if self.state == WANDER:
                 span = WALK_SPAN if self.moving else PAUSE_SPAN
+                if self.moving:
+                    self._pick_heading(cursor)
             else:
                 span = BURST_SPAN if self.moving else BURST_REST
             self.move_timer = random.uniform(*span)
@@ -194,8 +214,17 @@ class Man:
             direction = to_cursor / dist if dist > 1e-6 else Vector2()
             return direction * APPROACH_SPEED * ease, APPROACH_FORCE
 
-        # WANDER: heading does a random walk (noise), giving a lazy meander
-        self.heading += random.gauss(0, WANDER_JITTER) * math.sqrt(dt)
+        # WANDER: hold a per-segment heading, turning toward it in a smooth arc
+        # with only gentle drift — never Brownian back-and-forth pacing
+        diff = (self.heading_target - self.heading + math.pi) % (2 * math.pi) - math.pi
+        self.heading += diff * min(1.0, WANDER_TURN * dt)
+        self.heading += random.gauss(0, WANDER_NOISE) * math.sqrt(dt)
+        # near walls the edge bias wins; let heading follow the actual motion
+        # so he strolls along the wall instead of pressing into it
+        if self.vel.length() > 20:
+            va = math.atan2(self.vel.y, self.vel.x)
+            adrift = (va - self.heading + math.pi) % (2 * math.pi) - math.pi
+            self.heading += adrift * min(1.0, 0.8 * dt)
         return (Vector2(math.cos(self.heading), math.sin(self.heading))
                 * WANDER_SPEED, WANDER_FORCE)
 
@@ -247,8 +276,9 @@ class Man:
         # walk phase advances with distance traveled, so stride matches speed
         self.phase += speed * dt * PHASE_RATE
 
-        # facing: velocity while moving; the cursor while standing watchful
-        if speed > 10:
+        # facing: velocity while moving; the cursor while standing watchful.
+        # A deadband on vel.x keeps him from flip-flopping on shallow arcs.
+        if speed > 10 and abs(self.vel.x) > 8:
             target = 1.0 if self.vel.x >= 0 else -1.0
         elif self.state in (WATCH, APPROACH):
             target = 1.0 if cursor.x >= self.pos.x else -1.0
