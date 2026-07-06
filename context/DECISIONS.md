@@ -100,3 +100,23 @@ Running log of design/technical decisions. Newest at the bottom. Format:
 - 2026-07-06 — Debug overlay gains a transient "event:" line naming the last
   appraisal (event, need, source) for 3s — Phase 2's done-when is per-event
   bar movement, and the label makes each appraisal attributable at a glance.
+- 2026-07-06 — Phase 3 pulls minimal left-drag painting forward from Phase D
+  (persistent canvas + coarse occupancy only; NO obstacle force, NO inspect
+  behavior) — the prediction layer's done-when requires a world the user can
+  actually change; the rest of Phase D lands on schedule.
+- 2026-07-06 — Surprise is its own APPRAISALS entry ("prediction" need,
+  0v/+0.6a, intensity = viewed mismatch, capped 1) — keeps every substrate
+  write flowing through the Layer 2 table.
+- 2026-07-06 — Table "novelty" stays mapped to cursor encounters for now —
+  a drawn shape's discovery already spikes arousal via surprise; the
+  valence-positive novelty appraisal moves to shapes with Phase D's INSPECT.
+- 2026-07-06 — Volatility shifts only the arousal DECAY TARGET
+  (aro_base = 0.2 + 0.5·(vol − 0.15), clamped [0.08, 0.5]); modulation stays
+  centered on the neutral 0.2 constant — security reads as a genuinely
+  lower-energy body, and the clamp is the mandated dampener.
+- 2026-07-06 — Comfort drift tuned to a visible equilibrium (+0.007
+  valence/s at a fully familiar view ≈ +0.3 after minutes) — makes "an
+  unchanged world settles him" observable, not homeopathic.
+- 2026-07-06 — Cell occupancy is an incremental per-dab estimate (+0.03,
+  capped 1), not a pixel recount — coarse is fine for a 30×20 memory and
+  keeps painting O(dabs).

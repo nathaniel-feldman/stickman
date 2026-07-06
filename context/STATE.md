@@ -6,9 +6,9 @@ _Last updated: 2026-07-06_
 
 v1 complete. v2 Phase A (debug bars) done. The EMOTION PROTOCOL has been
 superseded by the **Emotion & Behavior Architecture (v1.5)** (see DESIGN.md),
-built in 6 phases: Phase 1 (substrate + body modulation) done and playtested
-("feels ok"); **Phase 2 (full appraisal layer) done**, awaiting playtest
-before Phase 3 (prediction layer / memory grid).
+built in 6 phases: phases 1 (substrate + modulation, playtested "feels ok")
+and 2 (full appraisal layer) done; **Phase 3 (prediction layer) done**,
+awaiting playtest before Phase 4 (relationship ledger + soul.json).
 `python stickman.py` runs the full toy.
 
 ## What works
@@ -48,11 +48,22 @@ before Phase 3 (prediction layer / memory grid).
   arms-up guard in flee) unchanged, wariness driven by the inline distress
   product max(0,-v)·a. That product < 0.15 also still blocks re-approach
   after a startle (v1 carryover until Phase 5 builds decision input).
+- **v1.5 Layer 3 — prediction**: left-click-drag paints white onto a
+  persistent `World` canvas (pulled forward from Phase D in minimal form —
+  no obstacle force, no INSPECT yet) with a coarse 30×20 occupancy grid.
+  `Man.memory` mirrors the grid; every frame, cells within 250px are
+  compared: matches drift him toward comfort (+0.007 valence/s at a fully
+  familiar view → equilibrium ≈ +0.3, arousal −0.008/s), mismatches fire a
+  "surprise" appraisal (intensity = mismatch size) and then memory accepts
+  reality. Rolling world volatility (half-life 120s, +0.35 per unit
+  mismatch, spawn 0.15) sets the arousal DECAY TARGET:
+  aro_base = 0.2 + 0.5·(vol − 0.15), clamped [0.08, 0.5] (dampener).
+  Modulation stays centered on the neutral 0.2 constant, so a secure world
+  reads as genuinely languid and a chaotic one as ambient anxiety.
 - Debug overlay: D toggles; bars for speed, valence (centered fill + zero
-  tick), arousal, curious, trust; "mood:" region label below, plus a
-  transient "event:" line naming the last appraisal (event, need, source)
-  for 3s after it fires. cursor_valence and volatility bars land with
-  phases 4 and 3.
+  tick), arousal, curious, trust, volatile; "mood:" region label below, plus
+  a transient "event:" line naming the last appraisal (event, need, source)
+  for 3s after it fires. The cursor_valence bar lands with Phase 4.
 
 Verified with a headless harness (2026-07-06): Phase 1 — double startle →
 valence -0.79 / arousal 0.99 / speed gain 1.55; arousal 0.44 at +12s; valence
@@ -60,7 +71,13 @@ recovers on the 30s half-life; four mood-corner renders; bounds hold under 60s
 of chase; no NaNs. Phase 2 — novelty on alert moved v/a +0.10/+0.30 per table;
 a full look then bored walk-off fired inspected (+0.15v); startle and calm
 company fire with correct deltas; the three triggerless hooks apply exact
-table deltas when called; overlay renders the event line.
+table deltas when called; overlay renders the event line. Phase 3 — 3 min of
+unchanged world: valence +0.30 / arousal 0.07 / aro_base 0.15 = content; a
+blob painted in view spiked arousal 0.07→0.61 via surprise and stopped
+surprising once remembered; 90s of constant repainting pinned volatility
+(arousal 0.95, aro_base capped at 0.5); 4 min of stillness recovered him to
+content (volatility 0.25, arousal 0.18); startle/bounds/overlay regressions
+pass.
 
 ## What's tuned
 
@@ -72,10 +89,13 @@ table deltas when called; overlay renders the event line.
 
 ## What's broken
 
-- Nothing known. Phase 2 is verified headlessly; needs the live playtest
-  (watch the event line + bars as each event fires) before Phase 3.
+- Nothing known. Phase 3 is verified headlessly; needs the live playtest
+  (settling in a still world, edginess in a redecorated one) before Phase 4.
 - Calm company is nearly invisible until Phase 4 makes trust real (0.05 ×
   trust 0.2 = +0.01 per 10s window).
+- Painting is watch-only: he sees and remembers drawn shapes but does not
+  avoid or inspect them (that's Phase D of the v2 arc). Drawn pixels are
+  also not erasable yet (Phase E).
 - Emotion→decision effects from the old protocol (hair-trigger spook when
   afraid, wider flee distance, longer hesitation, excited burst/stop-distance
   changes, dejected notice radius, curiosity-gain valence coupling) were
@@ -85,10 +105,9 @@ table deltas when called; overlay renders the event line.
 
 ## What's next
 
-- Playtest Phase 2 per its done-when: distinct events visibly move the bars
-  per the table (watch the transient "event:" line in the overlay).
-- On confirmation: Phase 3 — prediction layer: coarse seen-grid (built now,
-  drawing input comes with Phase D), match→comfort / mismatch→surprise,
-  rolling world volatility coupling to the arousal baseline.
-- Then phases 4–6 per DESIGN.md v1.5 (ledger + soul.json, decision input,
-  perception gating).
+- Playtest Phase 3 per its done-when: leaving the world unchanged for 3 min
+  visibly settles him; repeatedly changing it keeps him on edge.
+- On confirmation: Phase 4 — relationship ledger (cursor_valence + standing
+  bias + proximity effects), soul.json persistence, sensitivity drift, and
+  the scripted 20-startle dampener test.
+- Then phases 5–6 (decision input, perception gating).

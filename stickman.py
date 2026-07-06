@@ -112,10 +112,32 @@ APPRAISALS = {
     "erasure":      ("safety",    -0.20, 0.2),  # memory violated (Phase E hook)
     "rest":         ("energy",     0.10, 0.0),  # energy recovered (Phase C hook)
     "trapped":      ("safety",    -0.30, 0.4),  # enclosed (Phase D hook)
+    "surprise":     ("prediction", 0.00, 0.6),  # view != memory (x mismatch)
 }
 CALM_COMPANY_S = 10.0   # sustained calm proximity per social appraisal
 INSPECT_CURIO = 0.6     # curiosity above this marks the look an inspection
 EVENT_FLASH_S = 3.0     # debug overlay names the last appraisal this long
+
+# ------------------------------------------- prediction layer (v1.5 L3) -----
+# His memory of the world IS his prediction of it. A coarse grid remembers
+# how occupied each cell looked; cells in view are compared to memory every
+# frame. Match = tiny comfort drift; mismatch = a surprise appraisal scaled
+# by its size, then memory updates. A rolling world-volatility value (recent
+# mismatch rate) moves the arousal decay TARGET: a world that keeps changing
+# gives ambient anxiety, a long-familiar one genuine security. Modulation
+# stays centered on the neutral ARO_BASE constant.
+GRID_COLS, GRID_ROWS = 30, 20   # coarse grid: 30x30 px cells
+VIEW_DIST = 250.0        # cells with centers this close are "in view"
+BRUSH_R = 4              # left-drag paint brush radius (px)
+DAB_OCC = 0.03           # cell occupancy added per paint dab (coarse estimate)
+COMFORT_VAL = 0.007      # valence/s while the view matches memory (~+0.3 eq.)
+COMFORT_ARO = -0.008     # arousal/s while the view matches memory
+VOL_HALF = 120.0         # world-volatility half-life (s)
+VOL_GAIN = 0.35          # volatility added per unit of viewed mismatch
+VOL_START = 0.15         # neutral volatility at spawn (persisted in Phase 4)
+VOL_ARO_SPAN = 0.5       # arousal-target shift per unit of volatility
+ARO_BASE_MIN = 0.08      # dampener: arousal target floor (secure world)
+ARO_BASE_MAX = 0.5       # dampener: arousal target cap (chaotic world)
 
 # Layer 5.1 modulation (body): smooth functions of the substrate, no hard
 # thresholds. Arousal scales speed/force/step rate/head rate; valence sets
@@ -156,6 +178,36 @@ DEBUG_FONT_PT = 14      # small white text
 
 WANDER, ALERT, APPROACH, WATCH, FLEE = (
     "wander", "alert", "approach", "watch", "flee")
+
+CELL_W = WIDTH / GRID_COLS
+CELL_H = HEIGHT / GRID_ROWS
+
+
+class World:
+    """The persistent paintable canvas and its coarse occupancy grid — what
+    is actually there, as opposed to what the man remembers (Man.memory).
+    Pulled forward from Phase D in minimal form (paint only: no obstacle
+    force, no inspect behavior yet) so the prediction layer has a world
+    that can change."""
+
+    def __init__(self):
+        self.canvas = pygame.Surface((WIDTH, HEIGHT))
+        self.canvas.fill(BLACK)
+        self.occ = [[0.0] * GRID_COLS for _ in range(GRID_ROWS)]
+
+    def _dab(self, pos):
+        pygame.draw.circle(self.canvas, WHITE,
+                           (round(pos.x), round(pos.y)), BRUSH_R)
+        c = min(GRID_COLS - 1, max(0, int(pos.x / CELL_W)))
+        r = min(GRID_ROWS - 1, max(0, int(pos.y / CELL_H)))
+        self.occ[r][c] = min(1.0, self.occ[r][c] + DAB_OCC)
+
+    def paint(self, a, b):
+        """Paint a stroke segment as dabs every few px so drags stay solid."""
+        seg = b - a
+        steps = max(1, int(seg.length() / 3))
+        for i in range(steps + 1):
+            self._dab(a + seg * (i / steps))
 
 
 class Man:
@@ -199,6 +251,13 @@ class Man:
         self.inspected = False       # this encounter reached full curiosity
         self.last_event = ""         # debug: most recent appraisal fired
         self.last_event_t = 1e9      # debug: seconds since it fired
+
+        # prediction (v1.5 Layer 3): what he remembers each cell looked like,
+        # how unstable the world has recently been, and the arousal target
+        # that instability sets (decay pulls arousal toward aro_base)
+        self.memory = [[0.0] * GRID_COLS for _ in range(GRID_ROWS)]
+        self.volatility = VOL_START
+        self.aro_base = ARO_BASE
 
         self.curious = 0.0           # 0..1: builds while watching a calm cursor
         self.trust = 0.2             # 0..1: placeholder until Phase F drives it
@@ -291,11 +350,53 @@ class Man:
         else:
             self.calm_company_t = 0.0
 
+        # decay: valence toward its fixed baseline, arousal toward the
+        # volatility-set target (an unstable world keeps the floor raised)
         self.valence = VAL_BASE + (self.valence - VAL_BASE) * math.exp(
             -LN2 * dt / VAL_HALF)
-        self.arousal = ARO_BASE + (self.arousal - ARO_BASE) * math.exp(
+        self.arousal = self.aro_base + (self.arousal - self.aro_base) * math.exp(
             -LN2 * dt / ARO_HALF)
+        self.valence = max(-1.0, min(1.0, self.valence))
+        self.arousal = max(0.0, min(1.0, self.arousal))
         self.speed_gain = 1.0 + ARO_SPEED_GAIN * (self.arousal - ARO_BASE)
+
+    def _predict(self, world, dt):
+        """Layer 3: compare cells in view to memory. Match drifts him toward
+        comfort; mismatch fires a surprise appraisal scaled by its size, then
+        memory accepts the new reality. Recent mismatch feeds a rolling world
+        volatility whose level sets the arousal decay target (clamped — the
+        dampener keeping a chaotic world short of permanent panic)."""
+        c0 = max(0, int((self.pos.x - VIEW_DIST) / CELL_W))
+        c1 = min(GRID_COLS - 1, int((self.pos.x + VIEW_DIST) / CELL_W))
+        r0 = max(0, int((self.pos.y - VIEW_DIST) / CELL_H))
+        r1 = min(GRID_ROWS - 1, int((self.pos.y + VIEW_DIST) / CELL_H))
+        view_sq = VIEW_DIST * VIEW_DIST
+        mismatch, matched, viewed = 0.0, 0, 0
+        for r in range(r0, r1 + 1):
+            dy = (r + 0.5) * CELL_H - self.pos.y
+            for c in range(c0, c1 + 1):
+                dx = (c + 0.5) * CELL_W - self.pos.x
+                if dx * dx + dy * dy > view_sq:
+                    continue
+                viewed += 1
+                diff = world.occ[r][c] - self.memory[r][c]
+                if abs(diff) > 0.001:
+                    mismatch += abs(diff)
+                    self.memory[r][c] = world.occ[r][c]
+                else:
+                    matched += 1
+        if mismatch > 0.0:
+            self._appraise("surprise", intensity=min(1.0, mismatch))
+        if viewed:
+            ease = matched / viewed  # a familiar view is quietly reassuring
+            self.valence += COMFORT_VAL * ease * dt
+            self.arousal = max(0.0, self.arousal + COMFORT_ARO * ease * dt)
+
+        self.volatility = min(1.0, self.volatility * math.exp(
+            -LN2 * dt / VOL_HALF) + VOL_GAIN * min(1.0, mismatch))
+        self.aro_base = max(ARO_BASE_MIN, min(
+            ARO_BASE_MAX,
+            ARO_BASE + VOL_ARO_SPAN * (self.volatility - VOL_START)))
 
     def _transitions(self, cursor):
         dist = self.pos.distance_to(cursor)
@@ -403,11 +504,13 @@ class Man:
         return push
 
     # ------------------------------------------------------------- update --
-    def update(self, cursor, dt):
+    def update(self, cursor, dt, world=None):
         self.state_time += dt
         self.breath_t += dt
         self.last_event_t += dt
         self._track_cursor(cursor, dt)
+        if world is not None:
+            self._predict(world, dt)
         self._substrate(cursor, dt)
         self._transitions(cursor)
 
@@ -631,6 +734,7 @@ class DebugOverlay:
             ("arousal", lambda: man.arousal, False),
             ("curious", lambda: man.curious, False),
             ("trust", lambda: man.trust, False),
+            ("volatile", lambda: man.volatility, False),
         ]
 
     def draw(self, surf):
@@ -672,9 +776,11 @@ def main():
     clock = pygame.time.Clock()
 
     man = Man((WIDTH / 2, HEIGHT / 2))
+    world = World()
     skeleton = Skeleton()
     overlay = DebugOverlay(man)
     debug_on = DEBUG_START_ON
+    paint_from = None  # last stroke point while the left button is held
 
     running = True
     while running:
@@ -688,10 +794,15 @@ def main():
                 debug_on = not debug_on
 
         cursor = Vector2(pygame.mouse.get_pos())
+        if pygame.mouse.get_pressed()[0]:
+            world.paint(paint_from or cursor, cursor)
+            paint_from = Vector2(cursor)
+        else:
+            paint_from = None
         if dt > 0:
-            man.update(cursor, dt)
+            man.update(cursor, dt, world)
 
-        screen.fill(BLACK)
+        screen.blit(world.canvas, (0, 0))
         skeleton.draw(screen, man)
         if debug_on:
             overlay.draw(screen)
