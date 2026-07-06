@@ -181,9 +181,31 @@ VAL_SLUMP_LEAN = 0.13   # forward hunch (rad) at full negative valence
 VAL_SLUMP_DROP = 4.0    # shoulder sag (px) at full negative valence
 VAL_IDLE_SWAY = 1.6     # idle weight-shift sway gain at content (+v, calm)
 VAL_PAUSE = 1.0         # wander pauses lengthen this fraction at content
-# v1 carryover, replaced by a proper Layer 5.2 utility term in Phase 5:
-# fear still blocks re-approaching until it fades (distress = max(0,-v)*a)
-APPROACH_BLOCK = 0.15
+
+# ---------------------------------------- decision input (v1.5 L5.2) --------
+# Emotion contributes terms to behavior utilities; it never overrides a
+# genuine startle (flee always wins). Approach willingness is the core
+# score: positive = engage the noticed cursor, negative = keep distance
+# (the AVOID behavior: back off briskly, watching it warily).
+APPR_BASE = 0.25      # a neutral fresh creature is willing to approach
+APPR_VAL = 0.5        # mood term: contentment opens him up
+APPR_CV = 0.6         # ledger term: liking you is a reason to come over
+APPR_CURIOUS = 0.2    # inspect drive: built-up curiosity pulls him closer
+APPR_DISTRESS = 1.5   # distress product term: fear vetoes engagement
+AVOID_MARGIN = -0.15  # engaged states withdraw below this (hysteresis)
+AVOID_SPEED = 75.0    # wary withdraw speed (brisker than a stroll)
+AVOID_EXIT = 1.3      # avoiding ends this many NEAR_DISTs from the cursor
+SPOOK_DISTRESS = 0.45   # startle threshold drops this much at full distress
+SPOOK_DREAD = 0.25      # and this much more at full dread of the cursor
+SPOOK_FLOOR = 300.0     # never below this (px/s): slow hands can't "startle"
+SAFE_DISTRESS = 0.6     # flee distance grows this fraction at full distress
+HESITATE_DISTRESS = 1.5  # approach hesitation lengthens with distress
+BURST_EXCITE = 0.7      # approach bursts lengthen with excitement (+v, +a)
+CURIO_VAL_GAIN = 0.35   # curiosity gain slope with valence (inspect drive)
+NOVELTY_REFRACTORY = 25.0  # re-alerting this soon isn't novel again (s)
+LONELY_S = 45.0       # this long without company = lonely
+WARM_PULL = 0.6       # lonely wander-heading pull toward a loved cursor
+# (rest readiness gets its utility term when Phase C builds energy/rest)
 
 # ------------------------------------------------------------ emotion pose --
 EMO_TAU = 0.25          # pose-parameter smoothing (s) — blended, never snapped
@@ -202,13 +224,13 @@ GUARD_RAISE = 0.8       # how high the hands come up in a flee (fraction of arm)
 # A live strip across the top of the screen: one column per emotional
 # parameter, its name above its bar, all white. D toggles it.
 DEBUG_START_ON = True   # overlay visible at launch (D toggles it)
-BAR_W, BAR_H = 96, 10   # bar outline size (px)
-BAR_COL_W = 120         # column pitch across the top of the screen (px)
+BAR_W, BAR_H = 90, 10   # bar outline size (px)
+BAR_COL_W = 110         # column pitch across the top of the screen (px)
 BAR_MARGIN = 8          # strip offset from the window edges (px)
 DEBUG_FONT_PT = 14      # small white text
 
-WANDER, ALERT, APPROACH, WATCH, FLEE = (
-    "wander", "alert", "approach", "watch", "flee")
+WANDER, ALERT, APPROACH, WATCH, FLEE, AVOID = (
+    "wander", "alert", "approach", "watch", "flee", "avoid")
 
 CELL_W = WIDTH / GRID_COLS
 CELL_H = HEIGHT / GRID_ROWS
@@ -302,6 +324,8 @@ class Man:
         self.comforts = 0
         self.dread = 0.0             # smooth ramp below CV_DREAD_EDGE
         self.warmth = 0.0            # smooth ramp above CV_WARM_EDGE
+        self.alerted_ago = 1e9       # seconds since he last entered ALERT
+        self.company_t = 1e9         # seconds since the cursor was near
         self.alert_span = 0.0        # how long this alert freeze lasts
         self.crouch = 0.0            # smoothed pose params
         self.lean_emo = 0.0
@@ -334,8 +358,18 @@ class Man:
             away = self.pos - cursor
             self.heading_target = (math.atan2(away.y, away.x)
                                    + random.uniform(-0.8, 0.8))
-        else:
-            self.heading_target = self.heading + random.gauss(0, WANDER_TURN_SPAN)
+            return
+        self.heading_target = self.heading + random.gauss(0, WANDER_TURN_SPAN)
+        # a loved cursor tugs at a lonely creature: strolls bend toward it
+        if cursor is not None and self.warmth > 0:
+            to_c = cursor - self.pos
+            if to_c.length() > NEAR_DIST:
+                pull = WARM_PULL * self.warmth * min(
+                    1.0, self.company_t / LONELY_S)
+                ang = math.atan2(to_c.y, to_c.x)
+                diff = ((ang - self.heading_target + math.pi)
+                        % (2 * math.pi) - math.pi)
+                self.heading_target += diff * pull
 
     def _set_state(self, state):
         if state != self.state:
@@ -360,8 +394,12 @@ class Man:
         if self.state == WANDER:
             return random.uniform(*WALK_SPAN)
         if self.moving:
-            return random.uniform(*BURST_SPAN)
-        return random.uniform(*BURST_REST)
+            # excitement (positive valence, high arousal) lengthens bursts
+            exc = max(0.0, self.valence) * self.arousal
+            return random.uniform(*BURST_SPAN) * (1 + BURST_EXCITE * exc)
+        # distress lengthens the hesitation between bursts
+        dis = max(0.0, -self.valence) * self.arousal
+        return random.uniform(*BURST_REST) * (1 + HESITATE_DISTRESS * dis)
 
     def _appraise(self, event, intensity=1.0, source="world"):
         """Layer 2: score one event against the need it affects and move the
@@ -397,6 +435,10 @@ class Man:
         """Layer 1 decay plus the standing Layer 4 pressures: how he feels
         about YOU leaks into how he feels, whenever you're around."""
         dist = self.pos.distance_to(cursor)
+        if dist < NEAR_DIST:
+            self.company_t = 0.0  # loneliness clock (Layer 5.2 warm pull)
+        else:
+            self.company_t += dt
         near_calm = (dist < NEAR_DIST and self.cursor_speed < SLOW_CURSOR
                      and self.state != FLEE)
         if near_calm:
@@ -483,12 +525,28 @@ class Man:
             ARO_BASE_MAX,
             ARO_BASE + VOL_ARO_SPAN * (self.volatility - VOL_START)))
 
+    def _approach_will(self):
+        """Layer 5.2 utility: willingness to engage the noticed cursor.
+        Positive = come over; negative = keep distance. Smooth terms from
+        mood, the relationship ledger, and the inspect drive — distress
+        vetoes, contentment and liking invite."""
+        distress = max(0.0, -self.valence) * self.arousal
+        return (APPR_BASE + APPR_VAL * self.valence
+                + APPR_CV * self.cursor_valence
+                + APPR_CURIOUS * self.curious
+                - APPR_DISTRESS * distress)
+
     def _transitions(self, cursor):
         dist = self.pos.distance_to(cursor)
         bored = self.cursor_idle_s > LOSE_INTEREST_S
+        distress = max(0.0, -self.valence) * self.arousal
 
-        # startle overrides everything (flee on genuine startle always wins)
-        if (self.state != FLEE and self.cursor_speed > FAST_CURSOR
+        # startle overrides everything (flee on a genuine startle always
+        # wins); distress and dread lower the threshold, floored so a slow
+        # hand can never "startle" him
+        spook = max(SPOOK_FLOOR, FAST_CURSOR * (
+            1 - SPOOK_DISTRESS * distress - SPOOK_DREAD * self.dread))
+        if (self.state != FLEE and self.cursor_speed > spook
                 and dist < STARTLE_DIST):
             self._set_state(FLEE)
             self._appraise("startle", source="cursor")
@@ -496,21 +554,28 @@ class Man:
             return
 
         if self.state == FLEE:
-            if dist > SAFE_DIST and self.state_time > MIN_FLEE_S:
+            safe = SAFE_DIST * (1 + SAFE_DISTRESS * distress)
+            if dist > safe and self.state_time > MIN_FLEE_S:
                 self._set_state(WATCH)  # pull up and look back warily
         elif self.state == WANDER:
             if dist < NEAR_DIST and self.cursor_speed < SLOW_CURSOR and not bored:
                 self._set_state(ALERT)  # freeze first: "what is that?"
-                self._appraise("novelty", source="cursor")
+                if self.alerted_ago > NOVELTY_REFRACTORY:
+                    self._appraise("novelty", source="cursor")
+                self.alerted_ago = 0.0
                 self.inspected = False
         elif self.state == ALERT:
             if dist > NEAR_DIST or bored:
                 self._set_state(WANDER)
             elif self.state_time > self.alert_span:
-                self._set_state(APPROACH)
+                # the decision: sized it up — now engage it or shun it
+                self._set_state(APPROACH if self._approach_will() > 0
+                                else AVOID)
         elif self.state == APPROACH:
             if dist > NEAR_DIST or bored:
                 self._set_state(WANDER)
+            elif self._approach_will() < AVOID_MARGIN:
+                self._set_state(AVOID)  # nerve failed on the way in
             elif dist < self._stop_dist() + 4:
                 self._set_state(WATCH)
         elif self.state == WATCH:
@@ -520,11 +585,15 @@ class Man:
                     self._appraise("inspected", source="cursor")
                     self.inspected = False
                 self._set_state(WANDER)
+            elif self._approach_will() < AVOID_MARGIN:
+                self._set_state(AVOID)  # too rattled to stay this close
             elif (dist > self._stop_dist() + 30
                     and self.cursor_speed < SLOW_CURSOR
-                    and max(0.0, -self.valence) * self.arousal
-                    < APPROACH_BLOCK):  # too rattled to close in (v1 carryover)
+                    and self._approach_will() > 0):
                 self._set_state(APPROACH)
+        elif self.state == AVOID:
+            if dist > NEAR_DIST * AVOID_EXIT or bored:
+                self._set_state(WANDER)
 
     def _stop_dist(self):
         """He keeps his distance from a cursor he has learned to dread,
@@ -542,6 +611,11 @@ class Man:
         if self.state == FLEE:
             away = -to_cursor / dist if dist > 1e-6 else Vector2(1, 0)
             return away * FLEE_SPEED * g, FLEE_FORCE * g
+
+        if self.state == AVOID:
+            # keep distance: a brisk wary withdraw, eyes on the cursor
+            away = -to_cursor / dist if dist > 1e-6 else Vector2(1, 0)
+            return away * AVOID_SPEED * g, APPROACH_FORCE * g
 
         if self.state == WATCH:
             return Vector2(), WATCH_FORCE  # brake to a standstill
@@ -599,6 +673,7 @@ class Man:
         self.state_time += dt
         self.breath_t += dt
         self.last_event_t += dt
+        self.alerted_ago += dt
         self._track_cursor(cursor, dt)
         if world is not None:
             self._predict(world, dt)
@@ -662,9 +737,9 @@ class Man:
         self.lean = (lean + self.stumble + self.lean_emo
                      + VAL_SLUMP_LEAN * self.slump * self.facing)
 
-        # gaze: the cursor when engaged with it (a glance back mid-flee),
-        # otherwise straight ahead
-        if self.state in (WATCH, APPROACH, ALERT, FLEE):
+        # gaze: the cursor when engaged with it (a glance back mid-flee or
+        # mid-withdraw), otherwise straight ahead
+        if self.state in (WATCH, APPROACH, ALERT, FLEE, AVOID):
             to_c = cursor - self.pos
             if to_c.length() > 1e-6:
                 self.look = to_c.normalize()
@@ -679,7 +754,9 @@ class Man:
         # (Valence coupling to curiosity gain returns as Phase 5 decision input.)
         if (self.state == WATCH and self.cursor_speed < SLOW_CURSOR
                 and self.state_time > CURIOUS_DELAY):
-            self.curious = min(1.0, self.curious + dt / CURIOUS_RAMP)
+            # inspect drive: a distressed creature explores less (L5.2)
+            gain = max(0.1, 1 + CURIO_VAL_GAIN * self.valence) / CURIOUS_RAMP
+            self.curious = min(1.0, self.curious + gain * dt)
             if self.curious > INSPECT_CURIO:
                 self.inspected = True  # a full look counts as an inspection
         else:
@@ -704,6 +781,10 @@ class Man:
                 self.state_time * 2 * math.pi * tilt_hz)
             if dist < REACH_DIST:
                 t_reach = max(0.0, (c - 0.35) / 0.65)
+        elif self.state == AVOID:
+            # keeping his distance: hunched a little, leaning away
+            t_crouch = 0.15 + 0.35 * f
+            t_lean = -LEAN_WARY * toward
         elif self.state == FLEE:
             t_crouch, t_guard = 0.25, 1.0
 
@@ -866,6 +947,7 @@ class DebugOverlay:
             ("valence", lambda: man.valence, True, None),
             ("arousal", lambda: man.arousal, False, lambda: man.aro_base),
             ("cursor", lambda: man.cursor_valence, True, None),
+            ("will", lambda: man._approach_will(), True, None),
             ("volatile", lambda: man.volatility, False, None),
             ("trust", lambda: man.trust, False, None),
             ("curious", lambda: man.curious, False, None),

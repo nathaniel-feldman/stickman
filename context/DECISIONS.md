@@ -146,3 +146,27 @@ Running log of design/technical decisions. Newest at the bottom. Format:
   minutes (spec); now ~12 min of uneventful time from floor to neutral.
 - 2026-07-06 — load_soul clamps every field to its floor/cap — a
   hand-edited soul.json must not be able to bypass the dampeners.
+- 2026-07-06 — Phase 5: engagement decided by one signed utility,
+  _approach_will (base 0.25 + 0.5·valence + 0.6·cursor_valence +
+  0.2·curiosity − 1.5·distress) rather than a full per-behavior utility
+  arbiter — the state machine's other edges are stimulus-driven and work;
+  full utility selection can land with Phase C's drives if ever needed.
+- 2026-07-06 — New AVOID behavior (brisk withdraw, eyes on cursor, exits at
+  1.3×NEAR_DIST) expresses negative willingness — the spec's done-when
+  needs visible avoidance, and "keeps distance, watches warily" (Layer 4)
+  gets its body here. Engaged states bail to AVOID below −0.15 (hysteresis
+  so approach/avoid can't flutter); the hard APPROACH_BLOCK carryover is
+  deleted as promised.
+- 2026-07-06 — Startle threshold is emotional again (−45% at full distress,
+  −25% at full dread) but floored at 300 px/s — "flee on genuine startle
+  always wins" cuts both ways: a slow hand must never read as a startle.
+- 2026-07-06 — Novelty appraisal gets a 25s refractory per ALERT entry —
+  AVOID cycles can re-alert often; repeated "novelty" for the same cursor
+  would pump arousal artificially.
+- 2026-07-06 — "Seeks proximity when lonely" implemented as a wander-heading
+  pull (warmth × min(1, 45s-starved loneliness), max 0.6 blend) — no social
+  meter exists yet, so loneliness is time-since-company; a real meter can
+  replace it in Phase C.
+- 2026-07-06 — "will" added to the overlay strip as a centered bar (columns
+  narrowed 120→110 so eight fit) — the approach/avoid decision is the thing
+  Phase 5's playtest must read.

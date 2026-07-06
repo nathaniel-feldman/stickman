@@ -6,11 +6,10 @@ _Last updated: 2026-07-06_
 
 v1 complete. v2 Phase A (debug bars) done. The EMOTION PROTOCOL has been
 superseded by the **Emotion & Behavior Architecture (v1.5)** (see DESIGN.md),
-built in 6 phases: phases 1 (substrate + modulation, playtested "feels ok"),
-2 (full appraisal layer), 3 (prediction layer), and **4 (relationship
-ledger + soul.json persistence) done** — phases 3+4 shipped together on
-user instruction ("move onto phase 4 without waiting"), so both await
-playtest before Phase 5 (decision input).
+built in 6 phases: 1 (substrate + modulation, playtested "feels ok"),
+2 (full appraisal layer), 3 (prediction layer), 4 (ledger + soul.json),
+and **5 (decision input) done**; phases 3–5 await playtest before Phase 6
+(perception gating, the last one).
 `python stickman.py` runs the full toy.
 
 ## What works
@@ -80,11 +79,27 @@ playtest before Phase 5 (decision input).
   counts; loaded on start (clamped to floors/caps), saved on exit + every
   60s. Deleting it is a full rebirth. `test_dampeners.py` (committed) is
   the mandated 20-startle verification.
+- **v1.5 Layer 5.2 — decision input**: `_approach_will()` is the utility
+  score deciding engagement — 0.25 base + 0.5·valence + 0.6·cursor_valence
+  + 0.2·curiosity − 1.5·distress (distress = max(0,−v)·a). After the ALERT
+  freeze he APPROACHes if positive, otherwise enters the new AVOID behavior:
+  a brisk withdraw (75 px/s) leaning away, eyes on the cursor, ending 1.3×
+  NEAR_DIST out; engaged states also bail to AVOID below a −0.15 hysteresis
+  margin (this replaces the old hard APPROACH_BLOCK carryover). Flee
+  sensitivity is emotional again: distress (−45%) and dread (−25%) lower
+  the startle threshold, floored at 300 px/s so a slow hand can never
+  "startle"; flee-safe distance grows +60% with distress. Approach pacing:
+  excitement lengthens bursts (+70%), distress lengthens hesitation
+  (+150%). Curiosity gain rides valence again (±35%, the inspect drive).
+  A lonely creature (no company 45s) with a loved cursor (warmth > 0) bends
+  wander headings toward it (the deferred "seeks proximity" effect).
+  Startle→flee still beats everything, tested from AVOID itself.
 - Debug overlay: a strip across the top of the screen (user request), one
   column per parameter — valence (centered), arousal (with a tick at its
-  volatility-set decay target), cursor_valence (centered), volatile, trust,
-  curious, speed — plus a "mood:" region label and transient "event:" line
-  underneath. D toggles; all white.
+  volatility-set decay target), cursor_valence (centered), will (centered:
+  the live approach-willingness score), volatile, trust, curious, speed —
+  plus a "mood:" region label and transient "event:" line underneath.
+  D toggles; all white.
 
 Verified with a headless harness (2026-07-06): Phase 1 — double startle →
 valence -0.79 / arousal 0.99 / speed gain 1.55; arousal 0.44 at +12s; valence
@@ -104,7 +119,15 @@ exactly on its 0.05 floor, cursor_valence on -0.7, sensitivity 1.40, valence
 calm heals mood to content and cursor_valence to -0.41 while jumpiness stays
 1.38; soul round-trips through save/load and deleting it births identical
 defaults; dread holds his watch distance at 66px vs the 50px base; the
-wander→alert→approach→watch chain and overlay strip still work.
+wander→alert→approach→watch chain and overlay strip still work. Phase 5 —
+the same 120 px/s cursor: a content creature (v +0.5) ran
+alert→approach→watch to 54px; a distressed one (v −0.7, a 0.8) went
+alert→avoid and never came closer than 120px; a calm creature with
+cursor_valence −0.6 also shunned it; a distressed creature fled a 540 px/s
+cursor that leaves a neutral one unmoved, while 240 px/s (below the floor)
+startles no one; startle wins from inside AVOID; 34/40 lonely heading picks
+bent toward a loved cursor; the neutral chain and the full dampener suite
+stay green.
 
 ## What's tuned
 
@@ -116,14 +139,13 @@ wander→alert→approach→watch chain and overlay strip still work.
 
 ## What's broken
 
-- Nothing known. Phases 3 and 4 are verified headlessly; both need the live
+- Nothing known. Phases 3–5 are verified headlessly; all need the live
   playtest pass.
 - Painting is watch-only: he sees and remembers drawn shapes but does not
   avoid or inspect them (that's Phase D of the v2 arc). Drawn pixels are
   also not erasable yet (Phase E).
-- "Seeks proximity when lonely" (the warm-cursor ledger effect) is deferred
-  to Phase 5 — it needs the utility layer and a social meter; the comfort
-  drift when near a loved cursor is in.
+- "Lonely" is a proxy (45s without the cursor within 250px), not a real
+  social meter — a proper one can land with Phase C's drives.
 - Emotion→decision effects from the old protocol (hair-trigger spook when
   afraid, wider flee distance, longer hesitation, excited burst/stop-distance
   changes, dejected notice radius, curiosity-gain valence coupling) were
@@ -133,12 +155,11 @@ wander→alert→approach→watch chain and overlay strip still work.
 
 ## What's next
 
-- Playtest phases 3+4: still world settles him / changing world keeps him on
-  edge; abuse across a restart carries over via soul.json (jumpier, more
-  distant), gentleness slowly warms him; deleting soul.json rebirths him.
-- On confirmation: Phase 5 — decision input (valence/arousal/cursor_valence
-  terms in behavior utility scores; approach willingness, flee sensitivity,
-  rest readiness, inspect drive; the same slow cursor approached by a
-  content creature, avoided by a distressed one).
-- Then Phase 6 (perception gating, last: view distance + novelty threshold
-  with caps, the no-permanent-spiral test).
+- Playtest phases 3–5: still/changing world (prediction); abuse persisting
+  across restart via soul.json (ledger); startle him twice then bring a slow
+  cursor — he should back away (AVOID, watching it) instead of approaching,
+  then approach again once recovered (decision input).
+- On confirmation: Phase 6 — perception gating, the last phase: view
+  distance and novelty threshold scale with the emotional state, capped
+  (view ≥ 40% of normal, strongly positive stimuli always perceptible),
+  plus the deliberate-abuse-then-calm no-permanent-spiral test.
