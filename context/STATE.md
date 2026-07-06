@@ -6,8 +6,9 @@ _Last updated: 2026-07-06_
 
 v1 complete. v2 Phase A (debug bars) done. The EMOTION PROTOCOL has been
 superseded by the **Emotion & Behavior Architecture (v1.5)** (see DESIGN.md),
-built in 6 phases: **Phase 1 (substrate + body modulation) done**, awaiting
-playtest confirmation before Phase 2 (full appraisal layer).
+built in 6 phases: Phase 1 (substrate + body modulation) done and playtested
+("feels ok"); **Phase 2 (full appraisal layer) done**, awaiting playtest
+before Phase 3 (prediction layer / memory grid).
 `python stickman.py` runs the full toy.
 
 ## What works
@@ -27,12 +28,15 @@ playtest confirmation before Phase 2 (full appraisal layer).
 - **v1.5 Layer 1 — substrate**: valence (-1..1, 30s half-life mood) and arousal
   (0..1, 7s half-life weather) on `Man`, always decaying toward baseline
   (0 / 0.2). Only `_appraise` bumps them.
-- **v1.5 Layer 2 — appraisals (Phase 1 subset)**: the full appraisal table
-  lives as `APR_*` constants; wired now are ONLY startle (fast cursor →
-  -0.4v/+0.6a) and calm company (calm cursor within 250px sustained 10s →
-  +0.05v × trust per window; trust is still the 0.2 placeholder, so ~+0.01
-  per window — small but active). Inspection/novelty/erasure/rest/trapped
-  constants exist unwired (Phase 2+).
+- **v1.5 Layer 2 — appraisal layer (full)**: one `APPRAISALS` table (event →
+  need affected, Δvalence, Δarousal) applied through
+  `_appraise(event, intensity, source)`; `source` is where Phase 4 will hook
+  the relationship ledger. Wired events: startle (safety, -0.4v/+0.6a),
+  calm company (social, +0.05v × trust per sustained 10s within 250px),
+  novelty (curiosity, +0.1v/+0.3a — fires on first noticing the cursor until
+  Phase D remaps it to drawn shapes), inspected (curiosity, +0.15v — fires on
+  bored walk-off after curiosity passed 0.6). Declared but triggerless until
+  their systems exist: erasure (Phase E), rest (Phase C), trapped (Phase D).
 - **v1.5 Layer 5.1 — body modulation** (smooth functions, no thresholds):
   arousal scales all speeds/forces (`speed_gain`), step rate, and head-cock
   rate; valence sets posture — positive = upright with walk-bob bounce and
@@ -45,14 +49,18 @@ playtest confirmation before Phase 2 (full appraisal layer).
   product max(0,-v)·a. That product < 0.15 also still blocks re-approach
   after a startle (v1 carryover until Phase 5 builds decision input).
 - Debug overlay: D toggles; bars for speed, valence (centered fill + zero
-  tick), arousal, curious, trust; "mood:" region label below. cursor_valence
-  and volatility bars land with phases 4 and 3.
+  tick), arousal, curious, trust; "mood:" region label below, plus a
+  transient "event:" line naming the last appraisal (event, need, source)
+  for 3s after it fires. cursor_valence and volatility bars land with
+  phases 4 and 3.
 
-Verified with a headless harness (2026-07-06): double startle → valence -0.79 /
-arousal 0.99 / speed gain 1.55; arousal 0.44 at +12s; valence recovers on the
-30s half-life (-0.60 → -0.30 over 30s); 35s of calm proximity fires the calm
-company appraisal; skeleton + overlay draw in all four mood corners; bounds
-hold under 60s of chase; no NaNs.
+Verified with a headless harness (2026-07-06): Phase 1 — double startle →
+valence -0.79 / arousal 0.99 / speed gain 1.55; arousal 0.44 at +12s; valence
+recovers on the 30s half-life; four mood-corner renders; bounds hold under 60s
+of chase; no NaNs. Phase 2 — novelty on alert moved v/a +0.10/+0.30 per table;
+a full look then bored walk-off fired inspected (+0.15v); startle and calm
+company fire with correct deltas; the three triggerless hooks apply exact
+table deltas when called; overlay renders the event line.
 
 ## What's tuned
 
@@ -64,9 +72,8 @@ hold under 60s of chase; no NaNs.
 
 ## What's broken
 
-- Nothing known. Phase 1 is verified headlessly; the *feel* (twitchy window
-  after a double startle, slump depth, recovery arc readable with the overlay
-  off) needs the live playtest before Phase 2.
+- Nothing known. Phase 2 is verified headlessly; needs the live playtest
+  (watch the event line + bars as each event fires) before Phase 3.
 - Calm company is nearly invisible until Phase 4 makes trust real (0.05 ×
   trust 0.2 = +0.01 per 10s window).
 - Emotion→decision effects from the old protocol (hair-trigger spook when
@@ -78,9 +85,10 @@ hold under 60s of chase; no NaNs.
 
 ## What's next
 
-- Playtest Phase 1 per its done-when: startle him twice → visibly twitchy,
-  slumped movement recovering over ~30s, readable with the overlay OFF.
-- On confirmation: Phase 2 — appraisal event system ({source, need,
-  intensity, deltas}) + wire the remaining events that exist today.
-- Then phases 3–6 per DESIGN.md v1.5 (prediction, ledger + soul.json,
-  decision input, perception gating).
+- Playtest Phase 2 per its done-when: distinct events visibly move the bars
+  per the table (watch the transient "event:" line in the overlay).
+- On confirmation: Phase 3 — prediction layer: coarse seen-grid (built now,
+  drawing input comes with Phase D), match→comfort / mismatch→surprise,
+  rolling world volatility coupling to the arousal baseline.
+- Then phases 4–6 per DESIGN.md v1.5 (ledger + soul.json, decision input,
+  perception gating).

@@ -90,3 +90,13 @@ Running log of design/technical decisions. Newest at the bottom. Format:
   discrete appraisal per 10s of sustained calm proximity, scaled by trust —
   matches the v1.5 appraisal table; active now (tiny) with the 0.2 trust
   placeholder instead of inert.
+- 2026-07-06 — Phase 2: appraisal table unified into one APPRAISALS dict
+  (event → need, Δv, Δa) applied via _appraise(event, intensity, source) —
+  the full Layer 2 event shape now, so Phase 4 can route cursor-sourced
+  events into the relationship ledger without touching any call site.
+- 2026-07-06 — Novelty/inspected stay mapped to cursor events (entering
+  ALERT; bored walk-off after curiosity >0.6) until Phase D gives him drawn
+  shapes to notice — carries the earlier EMOTION PROTOCOL mapping into v1.5.
+- 2026-07-06 — Debug overlay gains a transient "event:" line naming the last
+  appraisal (event, need, source) for 3s — Phase 2's done-when is per-event
+  bar movement, and the label makes each appraisal attributable at a glance.

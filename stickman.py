@@ -97,17 +97,25 @@ VAL_HALF = 30.0         # valence half-life toward baseline (s) — slow mood
 ARO_HALF = 7.0          # arousal half-life toward baseline (s) — fast weather
 LN2 = math.log(2.0)
 
-# Layer 2 appraisal table: (valence delta, arousal delta) per event, from the
-# v1.5 spec. Phase 1 wires ONLY startle and calm company; the rest are
-# declared now and wired in Phase 2+ as their triggers exist.
-APR_STARTLE = (-0.4, 0.6)       # fast cursor: safety threatened
-APR_CALM_COMPANY = (0.05, 0.0)  # calm cursor near 10s: social met (x trust)
-CALM_COMPANY_S = 10.0           # sustained-proximity window per appraisal
-APR_INSPECTED = (0.15, 0.0)     # inspection completed: curiosity satisfied
-APR_NOVELTY = (0.1, 0.3)        # novel shape appears in view
-APR_ERASURE = (-0.2, 0.2)       # erasure discovered: memory violated
-APR_REST = (0.1, 0.0)           # rest completed: energy recovered
-APR_TRAPPED = (-0.3, 0.4)       # trapped/enclosed detected
+# Layer 2 appraisal table (v1.5): every significant event is scored against
+# the need it affects and bumps the substrate via Man._appraise. Format:
+#   event: (need affected, valence delta, arousal delta)
+# Cursor-sourced appraisals will also feed the relationship ledger (Phase 4).
+# Until drawn shapes exist (Phase D), "novelty" fires on first noticing the
+# cursor and "inspected" on walking off satisfied after a long look at it;
+# erasure/rest/trapped are declared but have no trigger yet (phases E/C/D).
+APPRAISALS = {
+    "startle":      ("safety",    -0.40, 0.6),  # fast cursor: threat
+    "calm_company": ("social",     0.05, 0.0),  # calm cursor near 10s (x trust)
+    "inspected":    ("curiosity",  0.15, 0.0),  # inspection completed
+    "novelty":      ("curiosity",  0.10, 0.3),  # novel shape appears in view
+    "erasure":      ("safety",    -0.20, 0.2),  # memory violated (Phase E hook)
+    "rest":         ("energy",     0.10, 0.0),  # energy recovered (Phase C hook)
+    "trapped":      ("safety",    -0.30, 0.4),  # enclosed (Phase D hook)
+}
+CALM_COMPANY_S = 10.0   # sustained calm proximity per social appraisal
+INSPECT_CURIO = 0.6     # curiosity above this marks the look an inspection
+EVENT_FLASH_S = 3.0     # debug overlay names the last appraisal this long
 
 # Layer 5.1 modulation (body): smooth functions of the substrate, no hard
 # thresholds. Arousal scales speed/force/step rate/head rate; valence sets
@@ -188,6 +196,9 @@ class Man:
         self.arousal = ARO_BASE      # 0 calm .. 1 activated (fast weather)
         self.speed_gain = 1.0        # arousal-driven speed/force multiplier
         self.calm_company_t = 0.0    # seconds of sustained calm proximity
+        self.inspected = False       # this encounter reached full curiosity
+        self.last_event = ""         # debug: most recent appraisal fired
+        self.last_event_t = 1e9      # debug: seconds since it fired
 
         self.curious = 0.0           # 0..1: builds while watching a calm cursor
         self.trust = 0.2             # 0..1: placeholder until Phase F drives it
@@ -252,12 +263,16 @@ class Man:
             return random.uniform(*BURST_SPAN)
         return random.uniform(*BURST_REST)
 
-    def _appraise(self, apr, scale=1.0):
-        """Layer 2, minimal Phase 1 form: apply one appraisal's (valence,
-        arousal) deltas, clamped. Grows into the full event system ({source,
-        need, intensity, deltas} feeding the relationship ledger) in Phase 2+."""
-        self.valence = max(-1.0, min(1.0, self.valence + apr[0] * scale))
-        self.arousal = max(0.0, min(1.0, self.arousal + apr[1] * scale))
+    def _appraise(self, event, intensity=1.0, source="world"):
+        """Layer 2: score one event against the need it affects and move the
+        substrate by the table deltas x intensity. `source` marks who caused
+        it; cursor-sourced appraisals will also update the relationship
+        ledger when Phase 4 lands. Sensitivities (Phase 4) scale here too."""
+        need, dv, da = APPRAISALS[event]
+        self.valence = max(-1.0, min(1.0, self.valence + dv * intensity))
+        self.arousal = max(0.0, min(1.0, self.arousal + da * intensity))
+        self.last_event = f"{event} ({need}, {source})"
+        self.last_event_t = 0.0
 
     def _substrate(self, cursor, dt):
         """Layer 1: decay the valence-arousal point toward baseline (always
@@ -271,7 +286,8 @@ class Man:
             self.calm_company_t += dt
             if self.calm_company_t >= CALM_COMPANY_S:
                 self.calm_company_t -= CALM_COMPANY_S
-                self._appraise(APR_CALM_COMPANY, scale=self.trust)
+                self._appraise("calm_company", intensity=self.trust,
+                               source="cursor")
         else:
             self.calm_company_t = 0.0
 
@@ -289,7 +305,7 @@ class Man:
         if (self.state != FLEE and self.cursor_speed > FAST_CURSOR
                 and dist < STARTLE_DIST):
             self._set_state(FLEE)
-            self._appraise(APR_STARTLE)  # safety threatened
+            self._appraise("startle", source="cursor")
             self.stumble_vel += STUMBLE_KICK * (1 if self.vel.x <= 0 else -1)
             return
 
@@ -299,6 +315,8 @@ class Man:
         elif self.state == WANDER:
             if dist < NEAR_DIST and self.cursor_speed < SLOW_CURSOR and not bored:
                 self._set_state(ALERT)  # freeze first: "what is that?"
+                self._appraise("novelty", source="cursor")
+                self.inspected = False
         elif self.state == ALERT:
             if dist > NEAR_DIST or bored:
                 self._set_state(WANDER)
@@ -311,6 +329,10 @@ class Man:
                 self._set_state(WATCH)
         elif self.state == WATCH:
             if dist > NEAR_DIST or bored:
+                if bored and self.inspected:
+                    # sized it up fully and walked off satisfied
+                    self._appraise("inspected", source="cursor")
+                    self.inspected = False
                 self._set_state(WANDER)
             elif (dist > STOP_DIST + 30 and self.cursor_speed < SLOW_CURSOR
                     and max(0.0, -self.valence) * self.arousal
@@ -384,6 +406,7 @@ class Man:
     def update(self, cursor, dt):
         self.state_time += dt
         self.breath_t += dt
+        self.last_event_t += dt
         self._track_cursor(cursor, dt)
         self._substrate(cursor, dt)
         self._transitions(cursor)
@@ -463,6 +486,8 @@ class Man:
         if (self.state == WATCH and self.cursor_speed < SLOW_CURSOR
                 and self.state_time > CURIOUS_DELAY):
             self.curious = min(1.0, self.curious + dt / CURIOUS_RAMP)
+            if self.curious > INSPECT_CURIO:
+                self.inspected = True  # a full look counts as an inspection
         else:
             self.curious = max(0.0, self.curious - CURIOUS_DROP * dt)
 
@@ -633,6 +658,11 @@ class DebugOverlay:
         mood = emotion_region(self.man.valence, self.man.arousal)
         surf.blit(self.font.render("mood: " + mood, True, WHITE),
                   (BAR_MARGIN, y))
+        if self.man.last_event_t < EVENT_FLASH_S:
+            # transient: names the appraisal that just moved the bars
+            surf.blit(self.font.render("event: " + self.man.last_event,
+                                       True, WHITE),
+                      (BAR_MARGIN, y + DEBUG_FONT_PT))
 
 
 def main():
