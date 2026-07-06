@@ -169,11 +169,12 @@ REACH_DIST = 110.0      # the hand only reaches out within this range
 GUARD_RAISE = 0.8       # how high the hands come up in a flee (fraction of arm)
 
 # ----------------------------------------------------------- debug overlay --
+# A live strip across the top of the screen: one column per emotional
+# parameter, its name above its bar, all white. D toggles it.
 DEBUG_START_ON = True   # overlay visible at launch (D toggles it)
-BAR_W, BAR_H = 120, 10  # bar outline size (px)
-BAR_GAP = 4             # vertical gap between rows (px)
-BAR_MARGIN = 8          # overlay offset from the top-left corner (px)
-BAR_LABEL_W = 60        # label column width left of the bars (px)
+BAR_W, BAR_H = 96, 10   # bar outline size (px)
+BAR_COL_W = 120         # column pitch across the top of the screen (px)
+BAR_MARGIN = 8          # strip offset from the window edges (px)
 DEBUG_FONT_PT = 14      # small white text
 
 WANDER, ALERT, APPROACH, WATCH, FLEE = (
@@ -718,55 +719,61 @@ def emotion_region(valence, arousal):
 
 
 class DebugOverlay:
-    """Live bars for the man's internal state, top-left. D toggles it.
+    """Every emotional parameter, live, as a strip across the top of the
+    screen: one column per value, its name above its bar, white on black.
+    D toggles it.
 
-    Adding a bar is one line in self.bars: a (label, getter, centered) tuple.
-    Plain bars fill 0..1 from the left; a centered bar takes -1..1 and fills
-    outward from the middle (right = positive, left = negative).
+    Adding a bar is one line in self.bars: (label, getter, centered, tick).
+    Plain bars fill 0..1 from the left; centered bars take -1..1 and fill
+    outward from a middle zero tick. An optional tick getter marks a target
+    value on the bar (arousal shows its volatility-set decay target).
     """
 
     def __init__(self, man):
         self.font = pygame.font.Font(None, DEBUG_FONT_PT)
         self.man = man
         self.bars = [
-            ("speed", lambda: man.vel.length() / FLEE_SPEED, False),
-            ("valence", lambda: man.valence, True),
-            ("arousal", lambda: man.arousal, False),
-            ("curious", lambda: man.curious, False),
-            ("trust", lambda: man.trust, False),
-            ("volatile", lambda: man.volatility, False),
+            ("valence", lambda: man.valence, True, None),
+            ("arousal", lambda: man.arousal, False, lambda: man.aro_base),
+            ("volatile", lambda: man.volatility, False, None),
+            ("trust", lambda: man.trust, False, None),
+            ("curious", lambda: man.curious, False, None),
+            ("speed", lambda: man.vel.length() / FLEE_SPEED, False, None),
         ]
 
     def draw(self, surf):
-        y = BAR_MARGIN
-        x = BAR_MARGIN + BAR_LABEL_W
+        x = BAR_MARGIN
+        y_label = BAR_MARGIN
+        y_bar = BAR_MARGIN + DEBUG_FONT_PT - 2
         inner = BAR_W - 2  # the fill sits flush against the 1px outline
-        for label, get, centered in self.bars:
-            text = self.font.render(label, True, WHITE)
-            surf.blit(text, (BAR_MARGIN, y + (BAR_H - text.get_height()) // 2))
-            pygame.draw.rect(surf, WHITE, (x, y, BAR_W, BAR_H), 1)
+        for label, get, centered, tick in self.bars:
+            surf.blit(self.font.render(label, True, WHITE), (x, y_label))
+            pygame.draw.rect(surf, WHITE, (x, y_bar, BAR_W, BAR_H), 1)
             if centered:
                 v = max(-1.0, min(1.0, get()))
                 fill = round(inner / 2 * abs(v))
                 mid = x + BAR_W // 2
                 left = mid if v >= 0 else mid - fill
                 if fill > 0:
-                    pygame.draw.rect(surf, WHITE, (left, y + 1, fill, BAR_H - 2))
-                pygame.draw.rect(surf, WHITE, (mid, y, 1, BAR_H))  # zero tick
+                    pygame.draw.rect(surf, WHITE,
+                                     (left, y_bar + 1, fill, BAR_H - 2))
+                pygame.draw.rect(surf, WHITE, (mid, y_bar, 1, BAR_H))
             else:
                 fill = round(inner * max(0.0, min(1.0, get())))
                 if fill > 0:
-                    pygame.draw.rect(surf, WHITE, (x + 1, y + 1, fill, BAR_H - 2))
-            y += BAR_H + BAR_GAP
+                    pygame.draw.rect(surf, WHITE,
+                                     (x + 1, y_bar + 1, fill, BAR_H - 2))
+                if tick is not None:
+                    tx = x + 1 + round(inner * max(0.0, min(1.0, tick())))
+                    pygame.draw.rect(surf, WHITE, (tx, y_bar - 2, 1, BAR_H + 4))
+            x += BAR_COL_W
 
         mood = emotion_region(self.man.valence, self.man.arousal)
-        surf.blit(self.font.render("mood: " + mood, True, WHITE),
-                  (BAR_MARGIN, y))
+        line = "mood: " + mood
         if self.man.last_event_t < EVENT_FLASH_S:
-            # transient: names the appraisal that just moved the bars
-            surf.blit(self.font.render("event: " + self.man.last_event,
-                                       True, WHITE),
-                      (BAR_MARGIN, y + DEBUG_FONT_PT))
+            line += "    event: " + self.man.last_event
+        surf.blit(self.font.render(line, True, WHITE),
+                  (BAR_MARGIN, y_bar + BAR_H + 4))
 
 
 def main():

@@ -120,3 +120,8 @@ Running log of design/technical decisions. Newest at the bottom. Format:
 - 2026-07-06 — Cell occupancy is an incremental per-dab estimate (+0.03,
   capped 1), not a pixel recount — coarse is fine for a 30×20 memory and
   keeps painting O(dabs).
+- 2026-07-06 — Debug overlay relaid as a strip across the top of the screen
+  (one column per emotional parameter, name above bar, all white; arousal
+  bar carries a tick at its volatility-set decay target) — user request:
+  a real-time physical representation of all emotional parameters at the
+  top of the screen. Bars remain one (label, getter, centered, tick) line.
