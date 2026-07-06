@@ -6,9 +6,11 @@ _Last updated: 2026-07-06_
 
 v1 complete. v2 Phase A (debug bars) done. The EMOTION PROTOCOL has been
 superseded by the **Emotion & Behavior Architecture (v1.5)** (see DESIGN.md),
-built in 6 phases: phases 1 (substrate + modulation, playtested "feels ok")
-and 2 (full appraisal layer) done; **Phase 3 (prediction layer) done**,
-awaiting playtest before Phase 4 (relationship ledger + soul.json).
+built in 6 phases: phases 1 (substrate + modulation, playtested "feels ok"),
+2 (full appraisal layer), 3 (prediction layer), and **4 (relationship
+ledger + soul.json persistence) done** — phases 3+4 shipped together on
+user instruction ("move onto phase 4 without waiting"), so both await
+playtest before Phase 5 (decision input).
 `python stickman.py` runs the full toy.
 
 ## What works
@@ -60,10 +62,29 @@ awaiting playtest before Phase 4 (relationship ledger + soul.json).
   aro_base = 0.2 + 0.5·(vol − 0.15), clamped [0.08, 0.5] (dampener).
   Modulation stays centered on the neutral 0.2 constant, so a secure world
   reads as genuinely languid and a chaotic one as ambient anxiety.
-- Debug overlay: D toggles; bars for speed, valence (centered fill + zero
-  tick), arousal, curious, trust, volatile; "mood:" region label below, plus
-  a transient "event:" line naming the last appraisal (event, need, source)
-  for 3s after it fires. The cursor_valence bar lands with Phase 4.
+- **v1.5 Layer 4 — relationship ledger + persistence**: `trust` is live
+  (drops 0.08 per startle, floor 0.05; rises 0.015 per calm-company
+  window) and `cursor_valence` (-0.7 floor .. +1) accumulates from every
+  cursor-sourced appraisal at 0.25× its valence delta. Effects: while he's
+  aware of the cursor (≤250px or engaged) his valence decay target shifts
+  by 0.25·cursor_valence (standing bias); smooth dread/warmth ramps past
+  the -0.3/+0.4 edges make proximity itself unnerving (drift -0.02v/+0.05a
+  per s) or comforting (+0.02v per s), and dread widens his watch/stop
+  distance up to 2.2×. Sensitivity drift: each startle +0.02 startle
+  sensitivity (cap 1.5 = +50%), amplifying future startle appraisals.
+  Dampeners: floors everywhere, and uneventful time (>15s since any event)
+  heals negative cursor_valence at 0.001/s and excess sensitivity at
+  0.00006/s — trauma recovers, jumpiness lingers across sessions.
+  `soul.json` (gitignored, next to stickman.py) persists trust,
+  cursor_valence, volatility, sensitivities, and lifetime startle/comfort
+  counts; loaded on start (clamped to floors/caps), saved on exit + every
+  60s. Deleting it is a full rebirth. `test_dampeners.py` (committed) is
+  the mandated 20-startle verification.
+- Debug overlay: a strip across the top of the screen (user request), one
+  column per parameter — valence (centered), arousal (with a tick at its
+  volatility-set decay target), cursor_valence (centered), volatile, trust,
+  curious, speed — plus a "mood:" region label and transient "event:" line
+  underneath. D toggles; all white.
 
 Verified with a headless harness (2026-07-06): Phase 1 — double startle →
 valence -0.79 / arousal 0.99 / speed gain 1.55; arousal 0.44 at +12s; valence
@@ -77,7 +98,13 @@ blob painted in view spiked arousal 0.07→0.61 via surprise and stopped
 surprising once remembered; 90s of constant repainting pinned volatility
 (arousal 0.95, aro_base capped at 0.5); 4 min of stillness recovered him to
 content (volatility 0.25, arousal 0.18); startle/bounds/overlay regressions
-pass.
+pass. Phase 4 (`test_dampeners.py`, rerunnable) — 20 startles: trust sits
+exactly on its 0.05 floor, cursor_valence on -0.7, sensitivity 1.40, valence
+-0.78 (not pinned); the jumpy man's startle hits 1.4× a fresh one's; 5 min of
+calm heals mood to content and cursor_valence to -0.41 while jumpiness stays
+1.38; soul round-trips through save/load and deleting it births identical
+defaults; dread holds his watch distance at 66px vs the 50px base; the
+wander→alert→approach→watch chain and overlay strip still work.
 
 ## What's tuned
 
@@ -89,13 +116,14 @@ pass.
 
 ## What's broken
 
-- Nothing known. Phase 3 is verified headlessly; needs the live playtest
-  (settling in a still world, edginess in a redecorated one) before Phase 4.
-- Calm company is nearly invisible until Phase 4 makes trust real (0.05 ×
-  trust 0.2 = +0.01 per 10s window).
+- Nothing known. Phases 3 and 4 are verified headlessly; both need the live
+  playtest pass.
 - Painting is watch-only: he sees and remembers drawn shapes but does not
   avoid or inspect them (that's Phase D of the v2 arc). Drawn pixels are
   also not erasable yet (Phase E).
+- "Seeks proximity when lonely" (the warm-cursor ledger effect) is deferred
+  to Phase 5 — it needs the utility layer and a social meter; the comfort
+  drift when near a loved cursor is in.
 - Emotion→decision effects from the old protocol (hair-trigger spook when
   afraid, wider flee distance, longer hesitation, excited burst/stop-distance
   changes, dejected notice radius, curiosity-gain valence coupling) were
@@ -105,9 +133,12 @@ pass.
 
 ## What's next
 
-- Playtest Phase 3 per its done-when: leaving the world unchanged for 3 min
-  visibly settles him; repeatedly changing it keeps him on edge.
-- On confirmation: Phase 4 — relationship ledger (cursor_valence + standing
-  bias + proximity effects), soul.json persistence, sensitivity drift, and
-  the scripted 20-startle dampener test.
-- Then phases 5–6 (decision input, perception gating).
+- Playtest phases 3+4: still world settles him / changing world keeps him on
+  edge; abuse across a restart carries over via soul.json (jumpier, more
+  distant), gentleness slowly warms him; deleting soul.json rebirths him.
+- On confirmation: Phase 5 — decision input (valence/arousal/cursor_valence
+  terms in behavior utility scores; approach willingness, flee sensitivity,
+  rest readiness, inspect drive; the same slow cursor approached by a
+  content creature, avoided by a distressed one).
+- Then Phase 6 (perception gating, last: view distance + novelty threshold
+  with caps, the no-permanent-spiral test).

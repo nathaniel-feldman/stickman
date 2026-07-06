@@ -125,3 +125,24 @@ Running log of design/technical decisions. Newest at the bottom. Format:
   bar carries a tick at its volatility-set decay target) — user request:
   a real-time physical representation of all emotional parameters at the
   top of the screen. Bars remain one (label, getter, centered, tick) line.
+- 2026-07-06 — Phase 4 makes trust LIVE (−0.08 per startle, +0.015 per
+  calm-company window) instead of waiting for Phase F — v1.5 folds trust
+  into the ledger and mandates its 0.05 floor, which implies movement;
+  Phase F keeps only the behavioral consequences (closer stops, FOLLOW).
+- 2026-07-06 — Standing bias implemented by shifting the valence DECAY
+  TARGET (VAL_BASE + 0.25·cursor_valence while aware of the cursor) — the
+  same mechanism volatility uses for arousal; a bias that decay can't erase,
+  with no extra pressure term to balance.
+- 2026-07-06 — The ledger's -0.3/+0.4 effect edges are smooth 0.4-wide
+  ramps (dread/warmth), per the project's no-hard-edges precedent; dread
+  widens stop distance up to 2.2× ("keeps distance, watches warily").
+- 2026-07-06 — "Seeks proximity when lonely/low social" deferred to Phase 5
+  — it's a utility-layer behavior and no social meter exists yet.
+- 2026-07-06 — test_dampeners.py committed as a permanent harness (backs up
+  any real soul.json) — the phase mandates the scripted 20-startle
+  verification; keeping it rerunnable guards phases 5–6 against spirals.
+- 2026-07-06 — CV_HEAL cut 0.003 → 0.001 after the test showed dread fully
+  healing in 5 idle minutes — recovery must read across sessions, not
+  minutes (spec); now ~12 min of uneventful time from floor to neutral.
+- 2026-07-06 — load_soul clamps every field to its floor/cap — a
+  hand-edited soul.json must not be able to bypass the dampeners.

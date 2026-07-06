@@ -21,6 +21,9 @@ env/
 # Claude Code local settings
 .claude/settings.local.json
 
+# stickman: his persistent soul (deleting it is a full rebirth)
+soul.json
+
 # OS / editor
 .DS_Store
 Thumbs.db

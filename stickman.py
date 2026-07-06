@@ -10,7 +10,9 @@ is derived from that physics state each frame (no sprites, no keyframes).
 Run:  python stickman.py     (Esc or close the window to quit)
 """
 
+import json
 import math
+import os
 import random
 from collections import deque
 
@@ -139,6 +141,34 @@ VOL_ARO_SPAN = 0.5       # arousal-target shift per unit of volatility
 ARO_BASE_MIN = 0.08      # dampener: arousal target floor (secure world)
 ARO_BASE_MAX = 0.5       # dampener: arousal target cap (chaotic world)
 
+# ------------------------------------- relationship ledger (v1.5 L4) --------
+# His lasting feelings about the cursor specifically: trust (earned by
+# events) and cursor_valence (accumulated liking/dread). Cursor-sourced
+# appraisals move both, slowly — single events barely register, patterns
+# shape who he becomes. Persisted in soul.json (personality = history).
+CV_RATE = 0.25           # cursor_valence gain per cursor appraisal's dv
+CV_FLOOR = -0.7          # dampener: dread of the cursor bottoms out here
+CV_BIAS = 0.25           # standing valence-target bias while aware of cursor
+CV_AWARE_DIST = 250.0    # he is "aware" of a cursor this close (or engaged)
+CV_DREAD_EDGE = -0.3     # below here proximity itself feels threatening ...
+CV_WARM_EDGE = 0.4       # ... above here proximity itself is comforting
+CV_RAMP = 0.4            # width of the smooth ramp past each edge
+CV_DREAD_DRIFT = (-0.02, 0.05)  # (valence, arousal)/s near a dreaded cursor
+CV_WARM_DRIFT = 0.02     # valence/s near a loved cursor
+CV_STANDOFF = 1.2        # stop distance grows this fraction at full dread
+TRUST_FLOOR = 0.05       # dampener: trust never falls below this
+TRUST_START = 0.2        # a new soul's starting trust
+TRUST_STARTLE_DROP = 0.08   # trust lost per startle (sharp)
+TRUST_CALM_GAIN = 0.015     # trust gained per calm-company window (slow)
+# sensitivity drift: experience retunes appraisal SENSITIVITIES, very slowly
+SENS_STARTLE_UP = 0.02   # startle sensitivity gained per startle (jumpy)
+SENS_MIN, SENS_MAX = 0.5, 1.5   # dampener: drift capped at +-50% of default
+HEAL_AFTER = 15.0        # uneventful seconds before time starts healing
+CV_HEAL = 0.001          # negative cursor_valence healed per uneventful s
+SENS_HEAL = 0.00006      # excess startle sensitivity healed per uneventful s
+SOUL_FILE = "soul.json"  # persisted next to this file; delete it = rebirth
+SOUL_SAVE_S = 60.0       # autosave period (also saved on exit)
+
 # Layer 5.1 modulation (body): smooth functions of the substrate, no hard
 # thresholds. Arousal scales speed/force/step rate/head rate; valence sets
 # posture (upright+bounce vs slump+short stride) and idle style.
@@ -261,7 +291,17 @@ class Man:
         self.aro_base = ARO_BASE
 
         self.curious = 0.0           # 0..1: builds while watching a calm cursor
-        self.trust = 0.2             # 0..1: placeholder until Phase F drives it
+
+        # relationship ledger (v1.5 Layer 4): lasting feelings about the
+        # cursor, moved only by cursor-sourced appraisals, persisted in
+        # soul.json. dread/warmth are its per-frame smooth ramps.
+        self.trust = TRUST_START     # 0..1: earned by events, lost to startles
+        self.cursor_valence = 0.0    # -1..1: accumulated feeling about YOU
+        self.startle_sens = 1.0      # appraisal sensitivity: drifts with life
+        self.startles = 0            # lifetime event counts (persisted)
+        self.comforts = 0
+        self.dread = 0.0             # smooth ramp below CV_DREAD_EDGE
+        self.warmth = 0.0            # smooth ramp above CV_WARM_EDGE
         self.alert_span = 0.0        # how long this alert freeze lasts
         self.crouch = 0.0            # smoothed pose params
         self.lean_emo = 0.0
@@ -325,22 +365,39 @@ class Man:
 
     def _appraise(self, event, intensity=1.0, source="world"):
         """Layer 2: score one event against the need it affects and move the
-        substrate by the table deltas x intensity. `source` marks who caused
-        it; cursor-sourced appraisals will also update the relationship
-        ledger when Phase 4 lands. Sensitivities (Phase 4) scale here too."""
+        substrate by the table deltas x intensity x learned sensitivity.
+        Cursor-sourced appraisals also feed the relationship ledger."""
         need, dv, da = APPRAISALS[event]
+        if event == "startle":
+            intensity *= self.startle_sens  # a jumpy life startles harder
         self.valence = max(-1.0, min(1.0, self.valence + dv * intensity))
         self.arousal = max(0.0, min(1.0, self.arousal + da * intensity))
+        if source == "cursor":
+            self._ledger(event, dv * intensity)
         self.last_event = f"{event} ({need}, {source})"
         self.last_event_t = 0.0
 
+    def _ledger(self, event, dv):
+        """Layer 4: cursor-sourced appraisals shape his lasting feelings
+        about the cursor. Slow on purpose — moments barely register,
+        patterns decide who he becomes. Floors are dampeners: trauma stays
+        recoverable."""
+        self.cursor_valence = max(CV_FLOOR, min(
+            1.0, self.cursor_valence + dv * CV_RATE))
+        if event == "startle":
+            self.trust = max(TRUST_FLOOR, self.trust - TRUST_STARTLE_DROP)
+            self.startle_sens = min(SENS_MAX,
+                                    self.startle_sens + SENS_STARTLE_UP)
+            self.startles += 1
+        elif event == "calm_company":
+            self.trust = min(1.0, self.trust + TRUST_CALM_GAIN)
+            self.comforts += 1
+
     def _substrate(self, cursor, dt):
-        """Layer 1: decay the valence-arousal point toward baseline (always
-        active — valence must never pin) and derive the body-modulation gain.
-        Also runs the one sustained Phase 1 appraisal: calm cursor proximity
-        held CALM_COMPANY_S seconds meets the social need, scaled by trust."""
-        near_calm = (self.pos.distance_to(cursor) < NEAR_DIST
-                     and self.cursor_speed < SLOW_CURSOR
+        """Layer 1 decay plus the standing Layer 4 pressures: how he feels
+        about YOU leaks into how he feels, whenever you're around."""
+        dist = self.pos.distance_to(cursor)
+        near_calm = (dist < NEAR_DIST and self.cursor_speed < SLOW_CURSOR
                      and self.state != FLEE)
         if near_calm:
             self.calm_company_t += dt
@@ -351,9 +408,36 @@ class Man:
         else:
             self.calm_company_t = 0.0
 
-        # decay: valence toward its fixed baseline, arousal toward the
+        # ledger ramps: smooth, edge-free versions of the -0.3 / +0.4 edges
+        self.dread = max(0.0, min(
+            1.0, (CV_DREAD_EDGE - self.cursor_valence) / CV_RAMP))
+        self.warmth = max(0.0, min(
+            1.0, (self.cursor_valence - CV_WARM_EDGE) / CV_RAMP))
+        if dist < NEAR_DIST:
+            # proximity to a dreaded cursor is itself unnerving; to a loved
+            # one, comforting
+            self.valence += (CV_WARM_DRIFT * self.warmth
+                             + CV_DREAD_DRIFT[0] * self.dread) * dt
+            self.arousal = min(1.0, self.arousal
+                               + CV_DREAD_DRIFT[1] * self.dread * dt)
+
+        # time heals (dampener): during uneventful stretches, dread and
+        # excess jumpiness drift back toward neutral
+        if self.last_event_t > HEAL_AFTER:
+            if self.cursor_valence < 0.0:
+                self.cursor_valence = min(0.0,
+                                          self.cursor_valence + CV_HEAL * dt)
+            if self.startle_sens > 1.0:
+                self.startle_sens = max(1.0,
+                                        self.startle_sens - SENS_HEAL * dt)
+
+        # decay: valence toward baseline plus the ledger's standing bias
+        # while he is aware of the cursor; arousal toward the
         # volatility-set target (an unstable world keeps the floor raised)
-        self.valence = VAL_BASE + (self.valence - VAL_BASE) * math.exp(
+        aware = dist < CV_AWARE_DIST or self.state != WANDER
+        val_target = VAL_BASE + (CV_BIAS * self.cursor_valence
+                                 if aware else 0.0)
+        self.valence = val_target + (self.valence - val_target) * math.exp(
             -LN2 * dt / VAL_HALF)
         self.arousal = self.aro_base + (self.arousal - self.aro_base) * math.exp(
             -LN2 * dt / ARO_HALF)
@@ -427,7 +511,7 @@ class Man:
         elif self.state == APPROACH:
             if dist > NEAR_DIST or bored:
                 self._set_state(WANDER)
-            elif dist < STOP_DIST + 4:
+            elif dist < self._stop_dist() + 4:
                 self._set_state(WATCH)
         elif self.state == WATCH:
             if dist > NEAR_DIST or bored:
@@ -436,10 +520,16 @@ class Man:
                     self._appraise("inspected", source="cursor")
                     self.inspected = False
                 self._set_state(WANDER)
-            elif (dist > STOP_DIST + 30 and self.cursor_speed < SLOW_CURSOR
+            elif (dist > self._stop_dist() + 30
+                    and self.cursor_speed < SLOW_CURSOR
                     and max(0.0, -self.valence) * self.arousal
                     < APPROACH_BLOCK):  # too rattled to close in (v1 carryover)
                 self._set_state(APPROACH)
+
+    def _stop_dist(self):
+        """He keeps his distance from a cursor he has learned to dread,
+        watching warily from further back (Layer 4 proximity effect)."""
+        return STOP_DIST * (1 + CV_STANDOFF * self.dread)
 
     def _desired_velocity(self, cursor, dt):
         """Each behavior expresses itself as a velocity it would like to have.
@@ -474,7 +564,7 @@ class Man:
 
         if self.state == APPROACH:
             # ease off over the last 80 px so he settles at the stop distance
-            ease = max(0.0, min(1.0, (dist - STOP_DIST) / 80.0))
+            ease = max(0.0, min(1.0, (dist - self._stop_dist()) / 80.0))
             direction = to_cursor / dist if dist > 1e-6 else Vector2()
             return direction * APPROACH_SPEED * g * ease, APPROACH_FORCE * g
 
@@ -708,6 +798,46 @@ class Skeleton:
             pygame.draw.line(surf, WHITE, elbow, hand, LINE_W)
 
 
+def soul_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), SOUL_FILE)
+
+
+def load_soul(man):
+    """Personality = history: restore the ledger, volatility, sensitivities,
+    and lifetime counts. No file (or a broken one) = a fresh identical soul;
+    deleting soul.json is a full rebirth."""
+    try:
+        with open(soul_path()) as f:
+            s = json.load(f)
+    except (OSError, ValueError):
+        return
+    man.trust = max(TRUST_FLOOR, min(1.0, float(s.get("trust", man.trust))))
+    man.cursor_valence = max(CV_FLOOR, min(
+        1.0, float(s.get("cursor_valence", 0.0))))
+    man.volatility = max(0.0, min(1.0, float(s.get("volatility", VOL_START))))
+    sens = s.get("sens", {})
+    man.startle_sens = max(SENS_MIN, min(
+        SENS_MAX, float(sens.get("startle", 1.0))))
+    man.startles = int(s.get("startles", 0))
+    man.comforts = int(s.get("comforts", 0))
+
+
+def save_soul(man):
+    data = {
+        "trust": round(man.trust, 4),
+        "cursor_valence": round(man.cursor_valence, 4),
+        "volatility": round(man.volatility, 4),
+        "sens": {"startle": round(man.startle_sens, 4)},
+        "startles": man.startles,
+        "comforts": man.comforts,
+    }
+    try:
+        with open(soul_path(), "w") as f:
+            json.dump(data, f, indent=2)
+    except OSError:
+        pass  # a soul that can't be written shouldn't crash the life
+
+
 def emotion_region(valence, arousal):
     """Debug-only label for the nearest emotion region. The creature's code
     must never read this — it exists purely for tuning the overlay."""
@@ -735,6 +865,7 @@ class DebugOverlay:
         self.bars = [
             ("valence", lambda: man.valence, True, None),
             ("arousal", lambda: man.arousal, False, lambda: man.aro_base),
+            ("cursor", lambda: man.cursor_valence, True, None),
             ("volatile", lambda: man.volatility, False, None),
             ("trust", lambda: man.trust, False, None),
             ("curious", lambda: man.curious, False, None),
@@ -783,11 +914,13 @@ def main():
     clock = pygame.time.Clock()
 
     man = Man((WIDTH / 2, HEIGHT / 2))
+    load_soul(man)  # who he is = what has been done to him
     world = World()
     skeleton = Skeleton()
     overlay = DebugOverlay(man)
     debug_on = DEBUG_START_ON
     paint_from = None  # last stroke point while the left button is held
+    save_in = SOUL_SAVE_S
 
     running = True
     while running:
@@ -808,6 +941,10 @@ def main():
             paint_from = None
         if dt > 0:
             man.update(cursor, dt, world)
+        save_in -= dt
+        if save_in <= 0:
+            save_soul(man)
+            save_in = SOUL_SAVE_S
 
         screen.blit(world.canvas, (0, 0))
         skeleton.draw(screen, man)
@@ -815,6 +952,7 @@ def main():
             overlay.draw(screen)
         pygame.display.flip()
 
+    save_soul(man)
     pygame.quit()
 
 
