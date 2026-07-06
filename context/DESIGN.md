@@ -166,6 +166,10 @@ With bars off (D), the screen is pure creature — black, white, alive.
 
 # EMOTION PROTOCOL — continuous valence-arousal
 
+> **Superseded by "Emotion & Behavior Architecture (v1.5)" below.** The
+> valence-arousal substrate and modulation outputs carry forward; the input
+> wiring and everything else is replaced by the v1.5 layered stack.
+
 Supersedes the v1 "Emotional expression" fear scalar: fear is no longer a
 stored variable but the low-valence/high-arousal region of a continuous 2D
 emotional state. Curiosity remains a separate drive (Phase C); its gain rate
@@ -258,3 +262,60 @@ minutes later (recovered). Leave him alone with a gentle cursor for 3
 minutes and watch him visibly settle into content: slower, upright,
 unbothered. The emotional state must be readable from movement alone with
 the overlay OFF.
+
+---
+
+## Emotion & Behavior Architecture (v1.5)
+
+### Philosophy
+Emotion is not a state machine. It is a layered stack modeled on real affect:
+PREDICTION feeds APPRAISAL feeds SUBSTRATE.
+- The creature's memory of the world is his prediction of it.
+- Events are appraised against his needs (safety, energy, curiosity, social/cursor).
+- Appraisals move a continuous emotional substrate.
+- The substrate then modulates his body, his decisions, and (eventually) his perception.
+His mood is dominated by his relationship with the cursor. He starts every life identical; who he becomes is determined by what the user does to him, persisted across sessions.
+
+### Layer 1 — Substrate (sliders)
+- valence: -1..+1 (distressed..content), baseline 0, slow decay toward baseline (half-life 20–40s)
+- arousal: 0..1 (calm..activated), baseline 0.2, fast decay (half-life 5–10s)
+Named emotions (afraid, excited, content, dejected, neutral) exist ONLY as debug-overlay labels for regions of this space. No code branches on them.
+
+### Layer 2 — Appraisal (events scored against needs)
+Every significant event produces an appraisal: {source, need_affected, intensity, valence_delta, arousal_delta}. Cursor-sourced events also update the relationship ledger (Layer 4).
+Initial appraisal table (constants at top of file):
+- Startle (fast cursor): safety threatened → valence -0.4, arousal +0.6
+- Calm cursor proximity sustained 10s: social need met → valence +0.05 per 10s, scaled by trust
+- Inspection completed: curiosity satisfied → valence +0.15
+- Novel shape appears in view: arousal +0.3, valence +0.1
+- Erasure discovered (memory violated): valence -0.2, arousal +0.2
+- Rest completed (energy recovered): valence +0.1
+- Trapped/enclosed detected: valence -0.3, arousal +0.4 (when enclosure detection exists)
+
+### Layer 3 — Prediction (memory as expectation)
+The memory grid IS his model of the world.
+- Each frame, cells in view are compared to memory. Match → tiny drift toward comfort (valence +, arousal -). Mismatch → surprise appraisal (arousal spike scaled by mismatch size) before memory updates.
+- A rolling "world volatility" value (recent mismatch rate, half-life ~2 min). High volatility → arousal baseline rises (ambient anxiety in a world that keeps changing). Low volatility → arousal baseline falls (secure in a familiar world).
+
+### Layer 4 — Relationship ledger (feelings about YOU)
+A persistent record about the cursor specifically:
+- trust: 0..1 (existing mechanic, now part of this ledger)
+- cursor_valence: -1..+1, his accumulated feeling about the cursor. Cursor-sourced appraisals move it (slowly). It contributes a standing bias to overall valence whenever the cursor is on screen and he is aware of it.
+- Effects: cursor_valence < -0.3 → cursor proximity itself is appraised as mildly threatening (he keeps distance, watches warily). cursor_valence > +0.4 → cursor proximity is comforting (valence drift up when near, seeks proximity when lonely/low social).
+
+### Layer 5 — Outputs (emotion acts on him three ways, built in this order)
+1. MODULATION (body): arousal scales max speed, max force, stride frequency, glance rate. Valence sets posture (upright+bounce vs slump+short stride), idle style. Smooth functions, no hard thresholds.
+2. DECISION INPUT (mind): valence/arousal/cursor_valence contribute to utility scores of behaviors (flee sensitivity, approach willingness, rest readiness, inspect drive). Flee on genuine startle always wins.
+3. PERCEPTION GATING (attention) — BUILT LAST: high arousal + low valence narrows perception (view distance shrinks, novelty threshold rises, only threat-relevant stimuli register). Content+calm widens it. Caps below prevent full blindness.
+
+### Personality = history (persistence)
+No randomization at spawn. Every creature starts from identical defaults. A save file `soul.json` (gitignored) persists: trust, cursor_valence, volatility baseline, appraisal sensitivities (see below), total startle/comfort counts. Loaded on start, saved on exit and every 60s.
+Experience slowly adjusts appraisal SENSITIVITIES (not just states): repeated startles increase startle sensitivity slightly (he becomes a jumpy individual); long calm history decreases it (he becomes secure). These drifts are very slow (visible across sessions, not minutes).
+Deleting soul.json is a full rebirth.
+
+### Dampeners (mandatory, built WITH each layer, not after)
+- Floors: trust never below 0.05, cursor_valence never below -0.7, valence never pinned (decay toward baseline always active).
+- Recovery: all negative drifts have a slow counter-drift toward neutral during uneventful time (time heals).
+- Perception narrowing capped: view distance never below 40% of normal; strongly positive stimuli always perceptible.
+- Sensitivity drift capped at ±50% of defaults.
+Rationale: three coupled feedback loops (emotion→perception→appraisal→emotion, compounding across sessions) can spiral into permanent terror. Dampeners keep trauma recoverable.

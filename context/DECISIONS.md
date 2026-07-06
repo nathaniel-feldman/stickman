@@ -67,3 +67,26 @@ Running log of design/technical decisions. Newest at the bottom. Format:
   flush against their 1px outlines — user request; valence gets a centered
   bar with a zero tick, and a debug-only "mood:" region label sits below the
   bars (the creature's code never reads it).
+- 2026-07-06 — "Emotion & Behavior Architecture (v1.5)" added to DESIGN.md,
+  superseding the EMOTION PROTOCOL's input wiring — user-designed layered
+  stack (prediction → appraisal → substrate → outputs), built in 6 phases
+  with a playtest stop after each; the valence-arousal substrate and body
+  modulation carry forward.
+- 2026-07-06 — Phase 1 removed the emotion→decision couplings (afraid spook/
+  flee/hesitate bends, excited burst/stop-distance, dejected notice radius,
+  curiosity-gain valence coupling) — they are Layer 5.2 decision input and
+  are rebuilt properly in Phase 5; Phase 1 is body modulation only.
+- 2026-07-06 — Kept fear blocking re-approach (inline distress product
+  max(0,-v)·a < 0.15) as a v1-behavior carryover — without it he'd walk right
+  back up to the thing he just fled; Phase 5 replaces it with a utility term.
+- 2026-07-06 — P_PROWL pressure dropped — not in the v1.5 appraisal table;
+  fast-cursor threat is the startle appraisal, and ambient unease in an
+  unstable world returns as Phase 3 volatility.
+- 2026-07-06 — Named corner-weight fields (afraid/excited/content/dejected)
+  removed from `Man` — v1.5 mandates named emotions exist ONLY as debug
+  labels; modulation reads valence/arousal directly via inline smooth
+  products.
+- 2026-07-06 — Calm company changed from a continuous trust-gated drift to a
+  discrete appraisal per 10s of sustained calm proximity, scaled by trust —
+  matches the v1.5 appraisal table; active now (tiny) with the 0.2 trust
+  placeholder instead of inert.

@@ -83,50 +83,47 @@ BURST_SPAN = (0.35, 0.8)         # approach: seconds of moving per burst
 BURST_REST = (0.3, 0.7)          # approach: seconds of pausing per burst
 ALERT_SPAN = (0.5, 1.1)          # seconds frozen sizing up a new cursor
 
-# ------------------------------------------------ emotion: valence-arousal --
-# Continuous 2D emotional state (no discrete emotion states). Valence is the
-# slow mood (-1 distressed .. +1 content), arousal the fast weather (0 calm ..
-# 1 activated). Events bump them (impulses), held conditions drift them
-# (pressures), and both decay toward baseline. Emotion never picks behaviors —
-# it only modulates their parameters, smoothly, via four corner weights:
-#   afraid   = max(0,-v)*a        excited = max(0,v)*a
-#   dejected = max(0,-v)*(1-a)    content = max(0,v)*(1-a)
+# ----------------------------------------- emotion architecture v1.5 --------
+# PREDICTION feeds APPRAISAL feeds SUBSTRATE (DESIGN.md "Emotion & Behavior
+# Architecture (v1.5)"). Layer 1, the substrate, is a continuous 2D point:
+# valence = slow mood (-1 distressed .. +1 content), arousal = fast weather
+# (0 calm .. 1 activated). Appraisals (Layer 2) bump it; it always decays
+# toward baseline (a mandatory dampener: valence is never pinned). Named
+# emotions (afraid/excited/content/dejected/neutral) exist ONLY as debug
+# overlay labels — no code branches on them.
 VAL_BASE = 0.0
 ARO_BASE = 0.2
-VAL_HALF = 30.0         # valence half-life toward baseline (s)
-ARO_HALF = 7.0          # arousal half-life toward baseline (s)
+VAL_HALF = 30.0         # valence half-life toward baseline (s) — slow mood
+ARO_HALF = 7.0          # arousal half-life toward baseline (s) — fast weather
 LN2 = math.log(2.0)
-# impulses: (valence bump, arousal bump) applied once when the event fires
-IMP_STARTLE = (-0.4, 0.6)    # the cursor jerked at him
-IMP_NOVELTY = (0.1, 0.3)     # noticed something new (today: the cursor)
-IMP_INSPECTED = (0.15, 0.0)  # finished sizing something up (habituated)
-IMP_ERASURE = (-0.2, 0.2)    # searched, found nothing (wired in Phase E)
-IMP_TRUST_UP = (0.2, 0.0)    # trust milestone crossed (wired in Phase F)
-# pressures: per-second drift while the condition holds
-P_CALM_COMPANY = 0.02        # valence/s near a calm cursor; needs trust >~0.5
-P_PROWL = (-0.06, 0.25)      # (valence, arousal)/s: fast cursor prowling near
-P_LOW_ENERGY = -0.02         # valence/s while energy < 0.25 (wired in Phase C)
-P_RESTING = (0.03, -0.10)    # (valence, arousal)/s while resting (Phase C)
-P_TRAPPED = (-0.05, 0.15)    # (valence, arousal)/s while enclosed (Phase D)
-# modulation: how the emotional point bends existing parameters
+
+# Layer 2 appraisal table: (valence delta, arousal delta) per event, from the
+# v1.5 spec. Phase 1 wires ONLY startle and calm company; the rest are
+# declared now and wired in Phase 2+ as their triggers exist.
+APR_STARTLE = (-0.4, 0.6)       # fast cursor: safety threatened
+APR_CALM_COMPANY = (0.05, 0.0)  # calm cursor near 10s: social met (x trust)
+CALM_COMPANY_S = 10.0           # sustained-proximity window per appraisal
+APR_INSPECTED = (0.15, 0.0)     # inspection completed: curiosity satisfied
+APR_NOVELTY = (0.1, 0.3)        # novel shape appears in view
+APR_ERASURE = (-0.2, 0.2)       # erasure discovered: memory violated
+APR_REST = (0.1, 0.0)           # rest completed: energy recovered
+APR_TRAPPED = (-0.3, 0.4)       # trapped/enclosed detected
+
+# Layer 5.1 modulation (body): smooth functions of the substrate, no hard
+# thresholds. Arousal scales speed/force/step rate/head rate; valence sets
+# posture (upright+bounce vs slump+short stride) and idle style.
 ARO_SPEED_GAIN = 0.7    # speed/force multiplier slope per unit arousal
 ARO_STRIDE_GAIN = 0.35  # step-frequency slope per unit arousal (twitchy steps)
-ARO_TILT_GAIN = 1.5     # head-movement frequency slope per unit arousal
+ARO_GLANCE_GAIN = 1.5   # head-movement frequency slope per unit arousal
 VAL_BOUNCE = 0.9        # extra walk-bob amplitude at full positive valence
 VAL_STRIDE = 0.3        # stride amplitude lost at full slump
 VAL_SLUMP_LEAN = 0.13   # forward hunch (rad) at full negative valence
 VAL_SLUMP_DROP = 4.0    # shoulder sag (px) at full negative valence
-AFRAID_FLEE = 0.6       # flee distance grows this fraction at full fear
-AFRAID_SPOOK = 0.45     # startle speed threshold drops this fraction
-AFRAID_HESITATE = 1.5   # approach hesitation pauses lengthen this fraction
-AFRAID_BLOCK = 0.15     # no re-approach while the afraid weight exceeds this
-EXCITE_BURST = 0.7      # approach bursts lengthen this fraction
-EXCITE_CLOSE = 0.25     # stopping distance shrinks this fraction
-CONTENT_SLOW = 0.3      # wander speed drops this fraction when content
-CONTENT_PAUSE = 1.0     # idle pauses lengthen this fraction when content
-CONTENT_SWAY = 1.6      # idle weight-shift sway grows this fraction
-DEJECT_IGNORE = 0.5     # notice radius shrinks this fraction when dejected
-CURIO_VAL_GAIN = 0.35   # curiosity gain-rate slope with valence
+VAL_IDLE_SWAY = 1.6     # idle weight-shift sway gain at content (+v, calm)
+VAL_PAUSE = 1.0         # wander pauses lengthen this fraction at content
+# v1 carryover, replaced by a proper Layer 5.2 utility term in Phase 5:
+# fear still blocks re-approaching until it fades (distress = max(0,-v)*a)
+APPROACH_BLOCK = 0.15
 
 # ------------------------------------------------------------ emotion pose --
 EMO_TAU = 0.25          # pose-parameter smoothing (s) — blended, never snapped
@@ -185,15 +182,12 @@ class Man:
         self.breath_t = random.uniform(0, 10)
         self.look = Vector2(1, 0)    # unit-ish gaze direction for the head
 
-        # emotion: continuous valence-arousal point, never a discrete state
+        # emotion substrate (v1.5 Layer 1): a continuous valence-arousal
+        # point, never a discrete state. Only _appraise writes bumps into it.
         self.valence = VAL_BASE      # -1 distressed .. +1 content (slow mood)
         self.arousal = ARO_BASE      # 0 calm .. 1 activated (fast weather)
-        self.afraid = 0.0            # smooth corner weights derived per frame
-        self.excited = 0.0
-        self.content = 0.0
-        self.dejected = 0.0
         self.speed_gain = 1.0        # arousal-driven speed/force multiplier
-        self.inspected = False       # this encounter reached full curiosity
+        self.calm_company_t = 0.0    # seconds of sustained calm proximity
 
         self.curious = 0.0           # 0..1: builds while watching a calm cursor
         self.trust = 0.2             # 0..1: placeholder until Phase F drives it
@@ -245,78 +239,66 @@ class Man:
                 self.alert_span = random.uniform(*ALERT_SPAN)
 
     def _move_span(self):
-        """Duration of the next move/pause leg, stretched by the mood: content
-        lingers in pauses, excitement lengthens bursts, fear lengthens the
-        hesitation between bursts."""
+        """Duration of the next move/pause leg. Idle style rides on the mood
+        (Layer 5.1): a content creature (positive valence, calm) lingers in
+        its wander pauses. Burst pacing is plain until Phase 5 adds emotion
+        to the decision layer."""
+        if self.state == WANDER and not self.moving:
+            ease = max(0.0, self.valence) * (1.0 - self.arousal)
+            return random.uniform(*PAUSE_SPAN) * (1 + VAL_PAUSE * ease)
         if self.state == WANDER:
-            if self.moving:
-                return random.uniform(*WALK_SPAN)
-            return random.uniform(*PAUSE_SPAN) * (
-                1 + CONTENT_PAUSE * self.content)
+            return random.uniform(*WALK_SPAN)
         if self.moving:
-            return random.uniform(*BURST_SPAN) * (1 + EXCITE_BURST * self.excited)
-        return random.uniform(*BURST_REST) * (1 + AFRAID_HESITATE * self.afraid)
+            return random.uniform(*BURST_SPAN)
+        return random.uniform(*BURST_REST)
 
-    def _impulse(self, imp):
-        """Apply one (valence, arousal) event bump, clamped to range."""
-        self.valence = max(-1.0, min(1.0, self.valence + imp[0]))
-        self.arousal = max(0.0, min(1.0, self.arousal + imp[1]))
+    def _appraise(self, apr, scale=1.0):
+        """Layer 2, minimal Phase 1 form: apply one appraisal's (valence,
+        arousal) deltas, clamped. Grows into the full event system ({source,
+        need, intensity, deltas} feeding the relationship ledger) in Phase 2+."""
+        self.valence = max(-1.0, min(1.0, self.valence + apr[0] * scale))
+        self.arousal = max(0.0, min(1.0, self.arousal + apr[1] * scale))
 
-    def _mood(self, cursor, dt):
-        """Advance the valence-arousal point: continuous pressures, decay
-        toward baseline, then the smooth corner weights everything reads."""
-        dist = self.pos.distance_to(cursor)
-        if dist < NEAR_DIST:
-            if self.cursor_speed > SLOW_CURSOR:
-                # something quick prowling close is unnerving
-                self.valence += P_PROWL[0] * dt
-                self.arousal += P_PROWL[1] * dt
-            else:
-                # calm company feels good — but only once trust is earned
-                t = max(0.0, min(1.0, (self.trust - 0.4) / 0.3))
-                self.valence += P_CALM_COMPANY * t * dt
-        # (energy/rest pressures land with Phase C, enclosure with Phase D)
+    def _substrate(self, cursor, dt):
+        """Layer 1: decay the valence-arousal point toward baseline (always
+        active — valence must never pin) and derive the body-modulation gain.
+        Also runs the one sustained Phase 1 appraisal: calm cursor proximity
+        held CALM_COMPANY_S seconds meets the social need, scaled by trust."""
+        near_calm = (self.pos.distance_to(cursor) < NEAR_DIST
+                     and self.cursor_speed < SLOW_CURSOR
+                     and self.state != FLEE)
+        if near_calm:
+            self.calm_company_t += dt
+            if self.calm_company_t >= CALM_COMPANY_S:
+                self.calm_company_t -= CALM_COMPANY_S
+                self._appraise(APR_CALM_COMPANY, scale=self.trust)
+        else:
+            self.calm_company_t = 0.0
 
         self.valence = VAL_BASE + (self.valence - VAL_BASE) * math.exp(
             -LN2 * dt / VAL_HALF)
         self.arousal = ARO_BASE + (self.arousal - ARO_BASE) * math.exp(
             -LN2 * dt / ARO_HALF)
-        self.valence = max(-1.0, min(1.0, self.valence))
-        self.arousal = max(0.0, min(1.0, self.arousal))
-
-        v, a = self.valence, self.arousal
-        self.afraid = max(0.0, -v) * a
-        self.excited = max(0.0, v) * a
-        self.content = max(0.0, v) * (1.0 - a)
-        self.dejected = max(0.0, -v) * (1.0 - a)
-        self.speed_gain = 1.0 + ARO_SPEED_GAIN * (a - ARO_BASE)
+        self.speed_gain = 1.0 + ARO_SPEED_GAIN * (self.arousal - ARO_BASE)
 
     def _transitions(self, cursor):
         dist = self.pos.distance_to(cursor)
         bored = self.cursor_idle_s > LOSE_INTEREST_S
-        # emotion bends the trigger thresholds, smoothly, but never picks the
-        # behavior itself: afraid = hair-trigger startle, dejected = oblivious
-        spook_speed = FAST_CURSOR * (1 - AFRAID_SPOOK * self.afraid)
-        notice_dist = NEAR_DIST * (1 - DEJECT_IGNORE * self.dejected)
-        stop_dist = STOP_DIST * (1 - EXCITE_CLOSE * self.excited)
 
-        # startle overrides everything
-        if (self.state != FLEE and self.cursor_speed > spook_speed
+        # startle overrides everything (flee on genuine startle always wins)
+        if (self.state != FLEE and self.cursor_speed > FAST_CURSOR
                 and dist < STARTLE_DIST):
             self._set_state(FLEE)
-            self._impulse(IMP_STARTLE)
+            self._appraise(APR_STARTLE)  # safety threatened
             self.stumble_vel += STUMBLE_KICK * (1 if self.vel.x <= 0 else -1)
             return
 
         if self.state == FLEE:
-            safe = SAFE_DIST * (1 + AFRAID_FLEE * self.afraid)
-            if dist > safe and self.state_time > MIN_FLEE_S:
+            if dist > SAFE_DIST and self.state_time > MIN_FLEE_S:
                 self._set_state(WATCH)  # pull up and look back warily
         elif self.state == WANDER:
-            if dist < notice_dist and self.cursor_speed < SLOW_CURSOR and not bored:
+            if dist < NEAR_DIST and self.cursor_speed < SLOW_CURSOR and not bored:
                 self._set_state(ALERT)  # freeze first: "what is that?"
-                self._impulse(IMP_NOVELTY)
-                self.inspected = False
         elif self.state == ALERT:
             if dist > NEAR_DIST or bored:
                 self._set_state(WANDER)
@@ -325,17 +307,14 @@ class Man:
         elif self.state == APPROACH:
             if dist > NEAR_DIST or bored:
                 self._set_state(WANDER)
-            elif dist < stop_dist + 4:
+            elif dist < STOP_DIST + 4:
                 self._set_state(WATCH)
         elif self.state == WATCH:
             if dist > NEAR_DIST or bored:
-                if bored and self.inspected:
-                    # sized it up and satisfied: a small win
-                    self._impulse(IMP_INSPECTED)
-                    self.inspected = False
                 self._set_state(WANDER)
-            elif (dist > stop_dist + 30 and self.cursor_speed < SLOW_CURSOR
-                    and self.afraid < AFRAID_BLOCK):  # too rattled to close in
+            elif (dist > STOP_DIST + 30 and self.cursor_speed < SLOW_CURSOR
+                    and max(0.0, -self.valence) * self.arousal
+                    < APPROACH_BLOCK):  # too rattled to close in (v1 carryover)
                 self._set_state(APPROACH)
 
     def _desired_velocity(self, cursor, dt):
@@ -371,8 +350,7 @@ class Man:
 
         if self.state == APPROACH:
             # ease off over the last 80 px so he settles at the stop distance
-            stop = STOP_DIST * (1 - EXCITE_CLOSE * self.excited)
-            ease = max(0.0, min(1.0, (dist - stop) / 80.0))
+            ease = max(0.0, min(1.0, (dist - STOP_DIST) / 80.0))
             direction = to_cursor / dist if dist > 1e-6 else Vector2()
             return direction * APPROACH_SPEED * g * ease, APPROACH_FORCE * g
 
@@ -387,9 +365,8 @@ class Man:
             va = math.atan2(self.vel.y, self.vel.x)
             adrift = (va - self.heading + math.pi) % (2 * math.pi) - math.pi
             self.heading += adrift * min(1.0, 0.8 * dt)
-        stroll = WANDER_SPEED * g * (1 - CONTENT_SLOW * self.content)
         return (Vector2(math.cos(self.heading), math.sin(self.heading))
-                * stroll, WANDER_FORCE * g)
+                * WANDER_SPEED * g, WANDER_FORCE * g)
 
     def _edge_bias(self):
         """Inward velocity bias that ramps up near walls: turns, never bounces."""
@@ -408,7 +385,7 @@ class Man:
         self.state_time += dt
         self.breath_t += dt
         self._track_cursor(cursor, dt)
-        self._mood(cursor, dt)
+        self._substrate(cursor, dt)
         self._transitions(cursor)
 
         desired, max_force = self._desired_velocity(cursor, dt)
@@ -482,18 +459,17 @@ class Man:
         dist = self.pos.distance_to(cursor)
 
         # curiosity: builds only while calmly watching; any motion resets it.
-        # Its gain rate rides on valence: a distressed creature explores less.
+        # (Valence coupling to curiosity gain returns as Phase 5 decision input.)
         if (self.state == WATCH and self.cursor_speed < SLOW_CURSOR
                 and self.state_time > CURIOUS_DELAY):
-            gain = (1 + CURIO_VAL_GAIN * self.valence) / CURIOUS_RAMP
-            self.curious = min(1.0, self.curious + gain * dt)
-            if self.curious > 0.6:
-                self.inspected = True  # a full look counts as an inspection
+            self.curious = min(1.0, self.curious + dt / CURIOUS_RAMP)
         else:
             self.curious = max(0.0, self.curious - CURIOUS_DROP * dt)
 
         toward = 1.0 if cursor.x >= self.pos.x else -1.0
-        f = self.afraid  # the fear corner of the valence-arousal plane
+        # distress posture weight: a smooth product of the substrate (low
+        # valence x high arousal), not a stored emotion — labels stay debug-only
+        f = max(0.0, -self.valence) * self.arousal
         c = self.curious * (1.0 - f)  # fear overrides curiosity
         t_crouch = t_lean = t_tilt = t_reach = t_guard = 0.0
         if self.state == ALERT:
@@ -504,7 +480,7 @@ class Man:
         elif self.state == WATCH:
             t_crouch = 0.4 * f + 0.1 * c
             t_lean = toward * (LEAN_CURIOUS * c - LEAN_WARY * f)
-            tilt_hz = TILT_FREQ * (1 + ARO_TILT_GAIN * (self.arousal - ARO_BASE))
+            tilt_hz = TILT_FREQ * (1 + ARO_GLANCE_GAIN * (self.arousal - ARO_BASE))
             t_tilt = TILT_AMP * c * math.sin(
                 self.state_time * 2 * math.pi * tilt_hz)
             if dist < REACH_DIST:
@@ -538,9 +514,10 @@ class Skeleton:
         bob = 1.4 * (1 + VAL_BOUNCE * man.bounce)
 
         breath = math.sin(man.breath_t * 2 * math.pi * BREATH_FREQ)
-        # contentment reads as a slow idle weight shift (bigger hip sway)
+        # contentment (+valence, calm) reads as a slow idle weight shift
+        ease = max(0.0, man.valence) * (1.0 - man.arousal)
         sway = (math.sin(man.breath_t * 0.7) * SWAY_AMP * idle
-                * (1 + CONTENT_SWAY * man.content))
+                * (1 + VAL_IDLE_SWAY * ease))
 
         # hip: the anchor. Bobs slightly with each step (twice per cycle).
         # Crouching shortens the hip-to-foot drop so the feet stay planted.
